@@ -32,6 +32,32 @@ have to reach it. If Caddy cannot complete the ACME challenge it still answers o
 certificate to offer, and clients see a TLS **internal error** alert rather than a connection failure.
 `docker compose logs caddy` says which challenge failed and why.
 
+### If port 8080 is already taken
+
+`WYU2_BIND` controls the host side of the port mapping only; the relay always listens on 8080 inside
+the container. Pick anything free:
+
+```bash
+WYU2_BIND=127.0.0.1:8090
+```
+
+Then `docker compose up -d` and check it with `curl http://127.0.0.1:8090/v1/info`. Nothing else needs
+changing: the healthcheck runs inside the container, and on the `tls` profile Caddy reaches the relay
+over the compose network as `relay:8080`, so that path never touches the host port at all.
+
+Keep the address in the value. A bare `WYU2_BIND=9000` publishes on every interface rather than
+loopback, which exposes the relay directly with no TLS in front of it.
+
+To move the port *inside* the container as well - almost never necessary - set
+`ASPNETCORE_HTTP_PORTS`, and update the mapping's container side, the healthcheck URL and
+`reverse_proxy relay:8080` in `deploy/Caddyfile` to match.
+
+Running without Docker, the port comes from ASP.NET Core directly:
+
+```bash
+ASPNETCORE_HTTP_PORTS=8090 dotnet run --project src/Wyu2.Relay
+```
+
 ### With your own proxy
 
 Leave the `tls` profile off and point your existing nginx, Caddy or Traefik at `127.0.0.1:8080`. Set
