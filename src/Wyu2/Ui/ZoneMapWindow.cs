@@ -19,6 +19,9 @@ public sealed class ZoneMapWindow : Window
     private readonly PresenceHub hub;
     private readonly GameDataCache data;
 
+    /// <summary>Seconds between marker pings.</summary>
+    private const float PulseSeconds = 2.4f;
+
     private uint selectedMapId;
     private ushort selectedTerritory;
     private bool followSelf = true;
@@ -211,10 +214,27 @@ public sealed class ZoneMapWindow : Window
                 continue;
 
             var staleness = UiHelpers.Staleness(friend, config.StaleAfterSeconds);
-            var colour = UiHelpers.Color(UiHelpers.Fade(friend.Settings.Color, staleness));
+            var tint = UiHelpers.Fade(friend.Settings.Color, staleness);
+            var colour = UiHelpers.Color(tint);
+            var markerRadius = 6f;
 
-            drawList.AddCircleFilled(point, 6f, colour, 16);
-            drawList.AddCircle(point, 6f, UiHelpers.Color(new Vector4(0f, 0f, 0f, 0.8f)), 16, 1.5f);
+            // A map has no sweep to key off, so each marker runs its own sonar ping. The phase offset is
+            // derived from the account id, which keeps markers from all pulsing in lockstep and keeps
+            // each one's rhythm the same from session to session.
+            if (config.AnimateMapMarkers)
+            {
+                var phase = RadarSweep.PulsePhase(
+                    ImGui.GetTime(), PulseSeconds, RadarSweep.StableOffset(friend.AccountId));
+
+                var ringColour = tint with { W = tint.W * (1f - phase) * 0.6f };
+                drawList.AddCircle(
+                    point, markerRadius + (phase * 18f), UiHelpers.Color(ringColour), 24, 1.6f);
+
+                markerRadius *= 1f + (0.12f * MathF.Sin(phase * RadarSweep.Tau));
+            }
+
+            drawList.AddCircleFilled(point, markerRadius, colour, 16);
+            drawList.AddCircle(point, markerRadius, UiHelpers.Color(new Vector4(0f, 0f, 0f, 0.8f)), 16, 1.5f);
 
             var label = friend.Name;
             var size = ImGui.CalcTextSize(label);

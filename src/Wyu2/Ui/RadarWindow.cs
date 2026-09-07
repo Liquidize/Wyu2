@@ -81,10 +81,19 @@ public sealed class RadarWindow : Window
         if (config.Radar.RotateWithCamera)
             CameraUtil.TryGetYaw(out yaw);
 
+        // One shared clock for the sweep and every ping, so nothing can drift apart.
+        var animate = config.Radar.Animate;
+        var sweepAngle = animate
+            ? RadarSweep.Angle(ImGui.GetTime(), config.Radar.SweepSeconds)
+            : 0f;
+
+        if (animate && config.Radar.ShowSweep)
+            DrawSweep(drawList, centre, radius, sweepAngle);
+
         DrawCardinals(drawList, centre, radius, yaw);
 
         CollectBlips(player.Position, player.EntityId);
-        DrawBlips(drawList, centre, radius, yaw, player.Position);
+        DrawBlips(drawList, centre, radius, yaw, sweepAngle);
 
         if (config.Radar.ShowSelf)
             DrawSelf(drawList, centre, player.Rotation, yaw);
@@ -135,6 +144,37 @@ public sealed class RadarWindow : Window
         var label = centre + (north * (radius - 10f));
         drawList.AddText(label - new Vector2(4f, 7f), UiHelpers.Color(UiHelpers.Warn), "N");
     }
+
+    /// <summary>
+    /// The rotating wedge: a fan of triangles trailing the leading edge, each a little more transparent
+    /// than the last, which is what gives a scope its comet tail.
+    /// </summary>
+    private void DrawSweep(ImDrawListPtr drawList, Vector2 centre, float radius, float sweepAngle)
+    {
+        const int segments = 40;
+        const float tailAngle = MathF.PI * 0.7f;
+
+        var colour = config.Radar.SweepColor;
+        var previous = centre + (Direction(sweepAngle) * radius);
+
+        for (var i = 1; i <= segments; i++)
+        {
+            var t = i / (float)segments;
+            var point = centre + (Direction(sweepAngle - (tailAngle * t)) * radius);
+
+            var fade = 1f - t;
+            var wedge = colour with { W = fade * fade * 0.33f * config.Radar.Opacity };
+            drawList.AddTriangleFilled(centre, previous, point, UiHelpers.Color(wedge));
+
+            previous = point;
+        }
+
+        var edge = colour with { W = 0.85f * config.Radar.Opacity };
+        drawList.AddLine(centre, centre + (Direction(sweepAngle) * radius), UiHelpers.Color(edge), 1.6f);
+    }
+
+    /// <summary>Unit vector for a bearing, matching how blip bearings are measured.</summary>
+    private static Vector2 Direction(float radians) => new(MathF.Cos(radians), MathF.Sin(radians));
 
     private void CollectBlips(Vector3 selfPosition, uint selfEntityId)
     {
@@ -207,12 +247,14 @@ public sealed class RadarWindow : Window
         return theirWorld == 0 || world == 0 || theirWorld == world;
     }
 
-    private void DrawBlips(ImDrawListPtr drawList, Vector2 centre, float radius, float yaw, Vector3 selfPosition)
+    private void DrawBlips(ImDrawListPtr drawList, Vector2 centre, float radius, float yaw, float sweepAngle)
     {
         var range = MathF.Max(10f, config.Radar.RangeYalms);
         var scale = radius / range;
         var mouse = ImGui.GetMousePos();
         var hovered = ImGui.IsWindowHovered();
+        var ping = config.Radar.Animate && config.Radar.PingOnSweep;
+        var period = MathF.Max(0.5f, config.Radar.SweepSeconds);
 
         foreach (var blip in blips)
         {
@@ -229,7 +271,28 @@ public sealed class RadarWindow : Window
             }
 
             var point = centre + offset;
-            var colour = UiHelpers.Color(blip.Color);
+
+            // How long since the sweep last crossed this blip's bearing. Derived from the bearing rather
+            // than remembered per blip, so contacts coming and going never desynchronise.
+            var strength = 0f;
+            var sincePass = 0f;
+            if (ping)
+            {
+                sincePass = RadarSweep.SecondsSincePass(
+                    sweepAngle, MathF.Atan2(offset.Y, offset.X), period);
+                strength = RadarSweep.PingStrength(sincePass, period * 0.45f);
+            }
+
+            // Blips stay legible between pings; the flash rides on top rather than replacing them.
+            var tint = ping
+                ? Vector4.Lerp(blip.Color, Vector4.One, strength * 0.55f) with
+                {
+                    W = blip.Color.W * (0.62f + (0.38f * strength)),
+                }
+                : blip.Color;
+
+            var colour = UiHelpers.Color(tint);
+            var size = config.Radar.BlipSize * (1f + (0.45f * strength));
 
             if (clamped)
             {
@@ -237,8 +300,23 @@ public sealed class RadarWindow : Window
             }
             else
             {
-                drawList.AddCircleFilled(point, config.Radar.BlipSize, colour, 16);
-                drawList.AddCircle(point, config.Radar.BlipSize, UiHelpers.Color(new Vector4(0f, 0f, 0f, 0.7f)), 16, 1.4f);
+                if (ping)
+                {
+                    var progress = RadarSweep.RingProgress(sincePass, period * 0.35f);
+                    if (progress > 0f)
+                    {
+                        var ringColour = tint with { W = (1f - progress) * 0.7f };
+                        drawList.AddCircle(
+                            point,
+                            config.Radar.BlipSize + (progress * 16f),
+                            UiHelpers.Color(ringColour),
+                            20,
+                            1.5f);
+                    }
+                }
+
+                drawList.AddCircleFilled(point, size, colour, 16);
+                drawList.AddCircle(point, size, UiHelpers.Color(new Vector4(0f, 0f, 0f, 0.7f)), 16, 1.4f);
             }
 
             if (config.Radar.ShowNames && !clamped)
@@ -247,10 +325,11 @@ public sealed class RadarWindow : Window
                     ? $"{blip.Name} ({blip.Job})"
                     : blip.Name;
 
-                var size = ImGui.CalcTextSize(label);
+                // Text is left un-pinged: a label flashing once a second is just hard to read.
+                var textSize = ImGui.CalcTextSize(label);
                 drawList.AddText(
-                    point - new Vector2(size.X / 2f, size.Y + config.Radar.BlipSize + 1f),
-                    colour,
+                    point - new Vector2(textSize.X / 2f, textSize.Y + config.Radar.BlipSize + 1f),
+                    UiHelpers.Color(blip.Color),
                     label);
             }
 

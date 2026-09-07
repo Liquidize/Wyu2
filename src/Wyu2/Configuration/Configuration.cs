@@ -47,11 +47,24 @@ public sealed class RadarSettings
     public bool ShowJobIcons { get; set; } = true;
     public bool ShowOffscreenArrows { get; set; } = true;
     public bool ShowSelf { get; set; } = true;
+
+    /// <summary>Master switch for the sweep and the ping animation.</summary>
+    public bool Animate { get; set; } = true;
+
+    /// <summary>Draw the rotating sweep wedge.</summary>
+    public bool ShowSweep { get; set; } = true;
+
+    /// <summary>Flash each blip as the sweep passes over it.</summary>
+    public bool PingOnSweep { get; set; } = true;
+
+    /// <summary>Seconds for one full rotation.</summary>
+    public float SweepSeconds { get; set; } = 3f;
     public float BlipSize { get; set; } = 6f;
     public float Opacity { get; set; } = 0.9f;
     public Vector4 BackgroundColor { get; set; } = new(0.03f, 0.05f, 0.08f, 0.72f);
     public Vector4 GridColor { get; set; } = new(0.35f, 0.45f, 0.6f, 0.45f);
     public Vector4 SelfColor { get; set; } = new(1f, 0.85f, 0.35f, 1f);
+    public Vector4 SweepColor { get; set; } = new(0.40f, 0.92f, 0.76f, 1f);
     public Vector4 StaleColor { get; set; } = new(0.55f, 0.55f, 0.55f, 1f);
 }
 
@@ -136,6 +149,9 @@ public sealed class Configuration : IPluginConfiguration
     public bool ShowMainWindowOnStart { get; set; }
     public bool ShowDtrEntry { get; set; } = true;
     public bool ShowWorldOverlay { get; set; }
+
+    /// <summary>Pulse a sonar ring out of each map marker.</summary>
+    public bool AnimateMapMarkers { get; set; } = true;
     public bool OverlayShowActivity { get; set; } = true;
     public float OverlayMaxDistance { get; set; } = 200f;
     public bool AnnounceZoneChangesInChat { get; set; }

@@ -243,11 +243,46 @@ public sealed class ConfigWindow : Window
             config.Save();
 
         ImGui.Separator();
+        if (UiHelpers.Checkbox("Animate the radar", () => radar.Animate, v => radar.Animate = v,
+                "The rotating sweep and the ping each blip gives as it passes. Turn this off for a static " +
+                "radar that only moves when people do."))
+        {
+            config.Save();
+        }
+
+        using (ImRaii.Disabled(!radar.Animate))
+        {
+            if (UiHelpers.Checkbox("Rotating sweep", () => radar.ShowSweep, v => radar.ShowSweep = v))
+                config.Save();
+
+            if (UiHelpers.Checkbox("Flash blips as the sweep passes", () => radar.PingOnSweep,
+                    v => radar.PingOnSweep = v))
+            {
+                config.Save();
+            }
+
+            if (UiHelpers.SliderFloat("Sweep speed", () => radar.SweepSeconds, v => radar.SweepSeconds = v,
+                    1f, 12f, "%.1f seconds per turn"))
+            {
+                config.Save();
+            }
+        }
+
+        if (UiHelpers.Checkbox("Pulse map markers", () => config.AnimateMapMarkers,
+                v => config.AnimateMapMarkers = v,
+                "Sends a sonar ring out of each marker on the friend map."))
+        {
+            config.Save();
+        }
+
+        ImGui.Separator();
         if (UiHelpers.ColorEdit("Background", () => radar.BackgroundColor, v => radar.BackgroundColor = v))
             config.Save();
         if (UiHelpers.ColorEdit("Grid", () => radar.GridColor, v => radar.GridColor = v))
             config.Save();
         if (UiHelpers.ColorEdit("Me", () => radar.SelfColor, v => radar.SelfColor = v))
+            config.Save();
+        if (UiHelpers.ColorEdit("Sweep", () => radar.SweepColor, v => radar.SweepColor = v))
             config.Save();
         if (UiHelpers.ColorEdit("Stale updates", () => radar.StaleColor, v => radar.StaleColor = v))
             config.Save();
