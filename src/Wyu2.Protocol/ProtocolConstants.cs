@@ -35,6 +35,9 @@ public static class ProtocolConstants
     /// <summary>Info string mixed into the key derivation so keys are unique to this application.</summary>
     public const string KeyDerivationInfo = "Wyu2/v1/presence";
 
+    /// <summary>How long an epoch key is used before it is rotated and its predecessor destroyed.</summary>
+    public const long EpochLifetimeMs = 24 * 60 * 60 * 1000L;
+
     /// <summary>Info string for beacon keys, keeping them distinct from presence keys.</summary>
     public const string BeaconKeyDerivationInfo = "Wyu2/v1/beacon";
 

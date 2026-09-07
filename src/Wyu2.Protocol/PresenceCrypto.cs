@@ -47,6 +47,33 @@ public static class PresenceCrypto
         return HKDF.DeriveKey(HashAlgorithmName.SHA256, ikm, KeyBytes, salt: null, info);
     }
 
+    /// <summary>
+    /// Derives the key for a payload sealed between two rotating epoch keys rather than between the two
+    /// long-term identity keys. Both epochs go into the info string, so the same pair of people get a
+    /// different key every rotation and an old key opens nothing new.
+    /// </summary>
+    public static byte[] DeriveEpochKey(
+        AccountKeyPair myEpochKey,
+        string theirEpochPublicKeyBase64,
+        string senderAccountId,
+        string recipientAccountId,
+        int senderEpoch,
+        int recipientEpoch,
+        string purpose = ProtocolConstants.KeyDerivationInfo)
+    {
+        ArgumentNullException.ThrowIfNull(myEpochKey);
+        ArgumentException.ThrowIfNullOrWhiteSpace(theirEpochPublicKeyBase64);
+
+        using var other = ECDiffieHellman.Create();
+        other.ImportSubjectPublicKeyInfo(Convert.FromBase64String(theirEpochPublicKeyBase64), out _);
+
+        var ikm = myEpochKey.Key.DeriveKeyFromHash(other.PublicKey, HashAlgorithmName.SHA256);
+        var info = Encoding.UTF8.GetBytes(
+            $"{purpose}|{senderAccountId}|{recipientAccountId}|{senderEpoch}|{recipientEpoch}");
+
+        return HKDF.DeriveKey(HashAlgorithmName.SHA256, ikm, KeyBytes, salt: null, info);
+    }
+
     /// <summary>Encrypts a payload for one recipient.</summary>
     public static PresenceEnvelope Seal<T>(
         byte[] key,
