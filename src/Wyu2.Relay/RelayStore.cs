@@ -79,6 +79,11 @@ public sealed class RelayStore
         if (displayName is null || !IsPlausiblePublicKey(request.PublicKey))
             return (StoreResult.Invalid, null);
 
+        // A blank signing key is not an error: a client from before forward secrecy has none to send,
+        // and refusing it here would lock those users out of a relay they already use.
+        if (request.SigningPublicKey.Length > 0 && !IsPlausiblePublicKey(request.SigningPublicKey))
+            return (StoreResult.Invalid, null);
+
         lock (sync)
         {
             // Blank entries are ignored: an unset environment variable must not become a code that
@@ -99,6 +104,7 @@ public sealed class RelayStore
                 Id = Guid.NewGuid().ToString("N"),
                 DisplayName = displayName,
                 PublicKey = request.PublicKey,
+                SigningPublicKey = request.SigningPublicKey,
                 ShareCode = NewUniqueShareCode(),
                 TokenHash = HashToken(token),
                 CreatedAtUnixMs = Now,
@@ -152,6 +158,7 @@ public sealed class RelayStore
                 DisplayName = account.DisplayName,
                 ShareCode = account.ShareCode,
                 PublicKey = account.PublicKey,
+                SigningPublicKey = account.SigningPublicKey,
                 CreatedAtUnixMs = account.CreatedAtUnixMs,
                 ContactCount = account.Contacts.Count,
                 PendingRequestCount = requests.Values.Count(r => r.ToAccountId == account.Id),
@@ -191,6 +198,17 @@ public sealed class RelayStore
                     DropBeaconsFromLocked(bucket, account.Id);
             }
 
+            if (request.SigningPublicKey is not null)
+            {
+                if (!IsPlausiblePublicKey(request.SigningPublicKey))
+                    return StoreResult.Invalid;
+
+                // Deliberately no parked blob is dropped here, unlike a change of ECDH key. A signing
+                // key seals nothing; it only vouches for epoch keys, so everything already parked stays
+                // exactly as readable as it was.
+                account.SigningPublicKey = request.SigningPublicKey;
+            }
+
             if (request.RotateShareCode)
             {
                 accountsByShareCode.Remove(ShareCode.Normalize(account.ShareCode)!);
@@ -198,6 +216,41 @@ public sealed class RelayStore
                 accountsByShareCode[ShareCode.Normalize(account.ShareCode)!] = account.Id;
             }
 
+            dirty = true;
+            return StoreResult.Ok;
+        }
+    }
+
+    /// <summary>
+    /// Records the epoch key an account wants contacts to encrypt to. Reports
+    /// <see cref="StoreResult.NotFound"/> when the account has no signing key to check the bundle
+    /// against, <see cref="StoreResult.Invalid"/> when it does not verify, and
+    /// <see cref="StoreResult.AlreadyExists"/> when a newer epoch is already published.
+    /// </summary>
+    public StoreResult PublishPrekey(Account account, PublishPrekeyRequest request)
+    {
+        var bundle = request.Bundle;
+
+        lock (sync)
+        {
+            if (account.SigningPublicKey.Length == 0)
+                return StoreResult.NotFound;
+
+            if (!bundle.IsPresent || !IsPlausiblePublicKey(bundle.EpochPublicKey))
+                return StoreResult.Invalid;
+
+            // Checking the signature here is a cheap filter against garbage, not a security control.
+            // The relay is not trusted, so it proves nothing to the people who matter: every client
+            // verifies each bundle against the contact's identity key itself before encrypting to it.
+            if (!bundle.Verify(account.Id, account.SigningPublicKey))
+                return StoreResult.Invalid;
+
+            // Refusing an epoch that does not advance stops anybody who captured an old bundle from
+            // replaying it to drag a contact back onto a key whose private half may already be known.
+            if (account.Prekey is not null && bundle.Epoch <= account.Prekey.Epoch)
+                return StoreResult.AlreadyExists;
+
+            account.Prekey = bundle;
             dirty = true;
             return StoreResult.Ok;
         }
@@ -262,6 +315,8 @@ public sealed class RelayStore
                     AccountId = contact.Id,
                     DisplayName = contact.DisplayName,
                     PublicKey = contact.PublicKey,
+                    SigningPublicKey = contact.SigningPublicKey,
+                    Prekey = contact.Prekey,
                     LinkedAtUnixMs = contact.CreatedAtUnixMs,
                     LastPresenceAtUnixMs = lastPresence,
                 });
@@ -676,6 +731,8 @@ public sealed class RelayStore
                     AccountId = m.Key,
                     DisplayName = member?.DisplayName ?? "(unknown)",
                     PublicKey = member?.PublicKey ?? string.Empty,
+                    SigningPublicKey = member?.SigningPublicKey ?? string.Empty,
+                    Prekey = member?.Prekey,
                     JoinedAtUnixMs = m.Value,
                 };
             })
@@ -750,6 +807,8 @@ public sealed class RelayStore
                     RecipientAccountId = envelope.RecipientAccountId,
                     Nonce = envelope.Nonce,
                     Ciphertext = envelope.Ciphertext,
+                    SenderEpoch = envelope.SenderEpoch,
+                    RecipientEpoch = envelope.RecipientEpoch,
                     ReceivedAtUnixMs = now,
                     ExpiresAtUnixMs = expires,
                 };
@@ -794,6 +853,8 @@ public sealed class RelayStore
                     SenderDisplayName = sender?.DisplayName ?? "(unknown)",
                     Nonce = blob.Nonce,
                     Ciphertext = blob.Ciphertext,
+                    SenderEpoch = blob.SenderEpoch,
+                    RecipientEpoch = blob.RecipientEpoch,
                     ReceivedAtUnixMs = blob.ReceivedAtUnixMs,
                     ExpiresAtUnixMs = blob.ExpiresAtUnixMs,
                 });
@@ -863,6 +924,8 @@ public sealed class RelayStore
                     RecipientAccountId = envelope.RecipientAccountId,
                     Nonce = envelope.Nonce,
                     Ciphertext = envelope.Ciphertext,
+                    SenderEpoch = envelope.SenderEpoch,
+                    RecipientEpoch = envelope.RecipientEpoch,
                     ReceivedAtUnixMs = now,
                     ExpiresAtUnixMs = expires,
                 };
@@ -908,6 +971,8 @@ public sealed class RelayStore
                     SenderDisplayName = sender?.DisplayName ?? "(unknown)",
                     Nonce = beacon.Nonce,
                     Ciphertext = beacon.Ciphertext,
+                    SenderEpoch = beacon.SenderEpoch,
+                    RecipientEpoch = beacon.RecipientEpoch,
                     ReceivedAtUnixMs = beacon.ReceivedAtUnixMs,
                     ExpiresAtUnixMs = beacon.ExpiresAtUnixMs,
                 });

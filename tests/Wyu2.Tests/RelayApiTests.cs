@@ -44,17 +44,20 @@ public class RelayApiTests : IClassFixture<RelayApiTests.RelayFactory>
         }
     }
 
-    private sealed record Client(HttpClient Http, AccountKeyPair Keys, string AccountId, string ShareCode);
+    private sealed record Client(
+        HttpClient Http, AccountKeyPair Keys, SigningKeyPair? Signer, string AccountId, string ShareCode);
 
-    private async Task<Client> RegisterAsync(string displayName)
+    private async Task<Client> RegisterAsync(string displayName, bool withSigningKey = true)
     {
         var http = factory.CreateClient();
         var keys = AccountKeyPair.Create();
+        var signer = withSigningKey ? SigningKeyPair.Create() : null;
 
         var response = await http.PostAsJsonAsync("/v1/accounts", new RegisterRequest
         {
             DisplayName = displayName,
             PublicKey = keys.ExportPublicKeyBase64(),
+            SigningPublicKey = signer?.ExportPublicKeyBase64() ?? string.Empty,
             ClientVersion = "tests",
         });
 
@@ -65,7 +68,17 @@ public class RelayApiTests : IClassFixture<RelayApiTests.RelayFactory>
         http.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue(ProtocolConstants.AuthorizationScheme, body!.AccessToken);
 
-        return new Client(http, keys, body.AccountId, body.ShareCode);
+        return new Client(http, keys, signer, body.AccountId, body.ShareCode);
+    }
+
+    /// <summary>Mints a bundle the way a client would, from its own signing key and a fresh epoch key.</summary>
+    private static PrekeyBundle BundleFor(Client client, int epoch)
+    {
+        using var epochKey = AccountKeyPair.Create();
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        return PrekeyBundle.Create(
+            client.Signer!, client.AccountId, epoch, epochKey, now, now + ProtocolConstants.EpochLifetimeMs);
     }
 
     [Fact]
@@ -179,6 +192,103 @@ public class RelayApiTests : IClassFixture<RelayApiTests.RelayFactory>
     }
 
     [Fact]
+    public async Task AnEpochKeyIsPublishedAndReachesAContact()
+    {
+        var alice = await RegisterAsync("Alice");
+        var bob = await RegisterAsync("Bob");
+        await LinkAsync(alice, bob);
+
+        var bundle = BundleFor(alice, epoch: 1);
+        var publish = await alice.Http.PostAsJsonAsync("/v1/me/prekey", new PublishPrekeyRequest { Bundle = bundle });
+
+        Assert.Equal(HttpStatusCode.NoContent, publish.StatusCode);
+
+        var contact = Assert.Single(await bob.Http.GetFromJsonAsync<List<ContactDto>>("/v1/contacts") ?? []);
+        Assert.Equal(bundle.EpochPublicKey, contact.Prekey?.EpochPublicKey);
+
+        // Bob checks the bundle himself, which is the only check that counts.
+        Assert.True(contact.Prekey!.Verify(contact.AccountId, contact.SigningPublicKey));
+    }
+
+    [Fact]
+    public async Task AStaleEpochIsRefused()
+    {
+        var alice = await RegisterAsync("Alice");
+
+        var second = await alice.Http.PostAsJsonAsync(
+            "/v1/me/prekey", new PublishPrekeyRequest { Bundle = BundleFor(alice, epoch: 2) });
+        second.EnsureSuccessStatusCode();
+
+        var first = await alice.Http.PostAsJsonAsync(
+            "/v1/me/prekey", new PublishPrekeyRequest { Bundle = BundleFor(alice, epoch: 1) });
+
+        Assert.Equal(HttpStatusCode.Conflict, first.StatusCode);
+        Assert.Equal("stale_epoch", (await first.Content.ReadFromJsonAsync<ApiError>())?.Code);
+    }
+
+    [Fact]
+    public async Task AnAccountFromBeforeForwardSecrecyIsUpgradedInPlace()
+    {
+        var alice = await RegisterAsync("Alice", withSigningKey: false);
+
+        // Nothing to check a bundle against yet, so the relay has to say so rather than file it.
+        using var signer = SigningKeyPair.Create();
+        var upgraded = alice with { Signer = signer };
+
+        var premature = await alice.Http.PostAsJsonAsync(
+            "/v1/me/prekey", new PublishPrekeyRequest { Bundle = BundleFor(upgraded, epoch: 1) });
+
+        Assert.Equal(HttpStatusCode.Conflict, premature.StatusCode);
+        Assert.Equal("no_signing_key", (await premature.Content.ReadFromJsonAsync<ApiError>())?.Code);
+
+        var patch = await alice.Http.PatchAsJsonAsync("/v1/me", new UpdateAccountRequest
+        {
+            SigningPublicKey = signer.ExportPublicKeyBase64(),
+        });
+
+        patch.EnsureSuccessStatusCode();
+        var me = await patch.Content.ReadFromJsonAsync<AccountInfo>();
+        Assert.Equal(signer.ExportPublicKeyBase64(), me?.SigningPublicKey);
+
+        var retry = await alice.Http.PostAsJsonAsync(
+            "/v1/me/prekey", new PublishPrekeyRequest { Bundle = BundleFor(upgraded, epoch: 1) });
+
+        Assert.Equal(HttpStatusCode.NoContent, retry.StatusCode);
+    }
+
+    [Fact]
+    public async Task PresenceEpochsAreHandedBackUntouched()
+    {
+        var alice = await RegisterAsync("Alice");
+        var bob = await RegisterAsync("Bob");
+        await LinkAsync(alice, bob);
+
+        var publish = await alice.Http.PostAsJsonAsync("/v1/presence", new PublishPresenceRequest
+        {
+            TtlSeconds = 120,
+            Envelopes =
+            [
+                new PresenceEnvelope
+                {
+                    RecipientAccountId = bob.AccountId,
+                    Nonce = "nonce",
+                    Ciphertext = "blob",
+                    SenderEpoch = 6,
+                    RecipientEpoch = 3,
+                },
+            ],
+        });
+
+        publish.EnsureSuccessStatusCode();
+
+        var fetched = await bob.Http.GetFromJsonAsync<FetchPresenceResponse>("/v1/presence");
+        var received = Assert.Single(fetched!.Entries);
+
+        Assert.Equal(6, received.SenderEpoch);
+        Assert.Equal(3, received.RecipientEpoch);
+    }
+
+    [Fact]
     public async Task DeletingAnAccountRevokesItsToken()
     {
         var alice = await RegisterAsync("Alice");
@@ -187,5 +297,18 @@ public class RelayApiTests : IClassFixture<RelayApiTests.RelayFactory>
 
         var response = await alice.Http.GetAsync("/v1/me");
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    private static async Task LinkAsync(Client a, Client b)
+    {
+        var invite = await a.Http.PostAsJsonAsync(
+            "/v1/contacts/requests", new CreateContactRequest { ShareCode = b.ShareCode });
+        invite.EnsureSuccessStatusCode();
+
+        var requests = await b.Http.GetFromJsonAsync<List<ContactRequestDto>>("/v1/contacts/requests");
+        var incoming = Assert.Single(requests!);
+
+        (await b.Http.PostAsync($"/v1/contacts/requests/{incoming.RequestId}/accept", null))
+            .EnsureSuccessStatusCode();
     }
 }

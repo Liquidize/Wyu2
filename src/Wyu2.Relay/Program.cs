@@ -89,6 +89,17 @@ app.MapPatch("/v1/me", (UpdateAccountRequest request, HttpContext http, RelaySto
         : Fail(400, "invalid_request", "Display name or public key was rejected.");
 }).RequireAccount();
 
+app.MapPost("/v1/me/prekey", (PublishPrekeyRequest request, HttpContext http, RelayStore store) =>
+    store.PublishPrekey(http.Account(), request) switch
+    {
+        StoreResult.Ok => Results.NoContent(),
+        StoreResult.NotFound => Fail(409, "no_signing_key",
+            "Publish a signing key with PATCH /v1/me before publishing an epoch key."),
+        StoreResult.AlreadyExists => Fail(409, "stale_epoch", "A newer epoch is already published."),
+        _ => Fail(400, "invalid_bundle", "That prekey bundle did not verify."),
+    })
+    .RequireAccount();
+
 app.MapDelete("/v1/me", (HttpContext http, RelayStore store) =>
 {
     store.DeleteAccount(http.Account());

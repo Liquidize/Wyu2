@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Wyu2.Protocol;
 
 namespace Wyu2.Relay;
 
@@ -12,6 +13,19 @@ public sealed class Account
 
     /// <summary>Base64 SHA-256 of the access token. The token itself is never stored.</summary>
     public required string TokenHash { get; set; }
+
+    /// <summary>
+    /// Base64 SubjectPublicKeyInfo of the long-term ECDSA key that vouches for this account's epoch
+    /// keys. Empty for an account registered before forward secrecy, which can be upgraded in place.
+    /// </summary>
+    public string SigningPublicKey { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The epoch key the account last published, handed on to anyone who may see them. Null until they
+    /// publish one. Kept in the snapshot so a relay restart does not leave contacts with nothing to
+    /// encrypt to until the owner next comes online.
+    /// </summary>
+    public PrekeyBundle? Prekey { get; set; }
 
     public long CreatedAtUnixMs { get; init; }
     public long LastSeenAtUnixMs { get; set; }
@@ -41,6 +55,15 @@ public sealed class StoredPresence
     public required string RecipientAccountId { get; init; }
     public required string Nonce { get; init; }
     public required string Ciphertext { get; init; }
+
+    /// <summary>
+    /// Which epoch keys sealed this. Stored verbatim and handed back untouched: the relay cannot read
+    /// the blob and has no business interpreting how it was sealed.
+    /// </summary>
+    public int SenderEpoch { get; init; }
+
+    public int RecipientEpoch { get; init; }
+
     public long ReceivedAtUnixMs { get; init; }
     public long ExpiresAtUnixMs { get; init; }
 }
@@ -61,6 +84,15 @@ public sealed class StoredBeacon
     public required string RecipientAccountId { get; init; }
     public required string Nonce { get; init; }
     public required string Ciphertext { get; init; }
+
+    /// <summary>
+    /// Which epoch keys sealed this. Stored verbatim and handed back untouched: the relay cannot read
+    /// the blob and has no business interpreting how it was sealed.
+    /// </summary>
+    public int SenderEpoch { get; init; }
+
+    public int RecipientEpoch { get; init; }
+
     public long ReceivedAtUnixMs { get; init; }
     public long ExpiresAtUnixMs { get; init; }
 }
