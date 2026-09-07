@@ -27,7 +27,7 @@ public sealed class WorldOverlay(Configuration.Configuration config, PresenceHub
 
         foreach (var friend in hub.Friends)
         {
-            if (!friend.Settings.ShowThem || friend.TerritoryTypeId != territory || friend.InstanceId != instance)
+            if (!config.CanSee(friend.Settings) || friend.TerritoryTypeId != territory || friend.InstanceId != instance)
                 continue;
 
             if (friend.Position is not { } position)

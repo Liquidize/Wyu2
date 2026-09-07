@@ -46,4 +46,10 @@ public sealed class RelayOptions
 
     /// <summary>Maximum accounts this instance will hold. Zero means unlimited.</summary>
     public int MaxAccounts { get; set; }
+
+    /// <summary>Hard cap on groups per account.</summary>
+    public int MaxGroups { get; set; } = 16;
+
+    /// <summary>Hard cap on members in one group.</summary>
+    public int MaxGroupMembers { get; set; } = 64;
 }

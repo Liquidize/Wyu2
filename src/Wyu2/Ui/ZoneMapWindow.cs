@@ -133,7 +133,7 @@ public sealed class ZoneMapWindow : Window
         ImGui.SameLine();
 
         var zones = hub.Friends
-            .Where(f => f.Settings.ShowThem && f.TerritoryTypeId is > 0)
+            .Where(f => config.CanSee(f.Settings) && f.TerritoryTypeId is > 0)
             .Select(f => (Territory: f.TerritoryTypeId!.Value, Map: f.MapId, Name: f.ZoneName))
             .DistinctBy(z => z.Territory)
             .OrderBy(z => z.Name, StringComparer.OrdinalIgnoreCase)
@@ -202,7 +202,7 @@ public sealed class ZoneMapWindow : Window
 
         foreach (var friend in hub.Friends)
         {
-            if (!friend.Settings.ShowThem || friend.TerritoryTypeId != selectedTerritory)
+            if (!config.CanSee(friend.Settings) || friend.TerritoryTypeId != selectedTerritory)
                 continue;
 
             if (friend.Position is not { } position)
@@ -328,7 +328,7 @@ public sealed class ZoneMapWindow : Window
     private void DrawLegend(Map map)
     {
         var name = map.PlaceName.ValueNullable?.Name.ExtractText();
-        var here = hub.Friends.Count(f => f.Settings.ShowThem && f.TerritoryTypeId == selectedTerritory);
+        var here = hub.Friends.Count(f => config.CanSee(f.Settings) && f.TerritoryTypeId == selectedTerritory);
         UiHelpers.TextMuted($"{(string.IsNullOrWhiteSpace(name) ? "Unknown zone" : name)} - {here} friend(s) here");
     }
 }

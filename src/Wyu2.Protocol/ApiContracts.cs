@@ -146,3 +146,48 @@ public sealed record ApiError
     [JsonIgnore]
     public bool IsEmpty => string.IsNullOrEmpty(Message);
 }
+
+// ---------------------------------------------------------------- groups
+
+/// <summary>
+/// A named set of accounts who can all see each other, so a static or a free company links once
+/// instead of every pair swapping codes.
+/// </summary>
+public sealed record GroupDto
+{
+    public string GroupId { get; init; } = string.Empty;
+    public string Name { get; init; } = string.Empty;
+
+    /// <summary>Code new members paste to join. Only returned to members.</summary>
+    public string JoinCode { get; init; } = string.Empty;
+
+    public string OwnerAccountId { get; init; } = string.Empty;
+    public long CreatedAtUnixMs { get; init; }
+    public List<GroupMemberDto> Members { get; init; } = [];
+}
+
+public sealed record GroupMemberDto
+{
+    public string AccountId { get; init; } = string.Empty;
+    public string DisplayName { get; init; } = string.Empty;
+    public string PublicKey { get; init; } = string.Empty;
+    public long JoinedAtUnixMs { get; init; }
+}
+
+public sealed record CreateGroupRequest
+{
+    public string Name { get; init; } = string.Empty;
+}
+
+public sealed record JoinGroupRequest
+{
+    public string JoinCode { get; init; } = string.Empty;
+}
+
+public sealed record UpdateGroupRequest
+{
+    public string? Name { get; init; }
+
+    /// <summary>Mint a new join code, invalidating the old one. Existing members are unaffected.</summary>
+    public bool RotateJoinCode { get; init; }
+}

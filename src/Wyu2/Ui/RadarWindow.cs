@@ -188,7 +188,7 @@ public sealed class RadarWindow : Window
 
         foreach (var friend in hub.Friends)
         {
-            if (!friend.Settings.ShowThem)
+            if (!config.CanSee(friend.Settings))
                 continue;
 
             if (!IsInSameInstance(friend, territory, instance, world))
@@ -427,14 +427,15 @@ public sealed class RadarWindow : Window
 
     private void DrawFooter()
     {
-        var elsewhere = hub.Friends.Count(f => f.Settings.ShowThem && f.IsOnline && !blips.Any(b => b.Key == f.AccountId));
+        var elsewhere = hub.Friends.Count(
+            f => config.CanSee(f.Settings) && f.IsOnline && !blips.Any(b => b.Key == f.AccountId));
         var shown = blips.Count;
 
         UiHelpers.TextMuted($"{shown} in view, {elsewhere} elsewhere");
         if (elsewhere > 0 && ImGui.IsItemHovered())
         {
             using var tooltip = ImRaii.Tooltip();
-            foreach (var friend in hub.Friends.Where(f => f.Settings.ShowThem && f.IsOnline))
+            foreach (var friend in hub.Friends.Where(f => config.CanSee(f.Settings) && f.IsOnline))
             {
                 if (blips.Any(b => b.Key == friend.AccountId))
                     continue;

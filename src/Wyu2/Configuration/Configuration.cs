@@ -29,6 +29,15 @@ public sealed class ContactSettings
     /// <summary>Optional narrower profile just for this contact; null means use the default profile.</summary>
     public SharingProfile? ProfileOverride { get; set; }
 
+    /// <summary>
+    /// True when you are linked with this person directly, by swapping share codes. Somebody can be a
+    /// direct contact, a fellow group member, or both, and unlinking one leaves the other standing.
+    /// </summary>
+    public bool IsDirectContact { get; set; } = true;
+
+    /// <summary>Groups you share with this person, if any.</summary>
+    public List<string> GroupIds { get; set; } = [];
+
     /// <summary>Colour used for their radar blip.</summary>
     public Vector4 Color { get; set; } = new(0.35f, 0.78f, 1.00f, 1f);
 
@@ -51,6 +60,24 @@ public sealed class ContactSettings
     public ushort LastSeenTerritoryId { get; set; }
 
     public string? LastSeenActivity { get; set; }
+}
+
+/// <summary>Local settings for one group. The group itself lives on the relay.</summary>
+public sealed class GroupSettings
+{
+    public string GroupId { get; set; } = string.Empty;
+
+    /// <summary>Name as the relay last reported it.</summary>
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>Publish your presence to this group's members.</summary>
+    public bool ShareWithGroup { get; set; } = true;
+
+    /// <summary>Show this group's members on the radar, map and list.</summary>
+    public bool ShowGroup { get; set; } = true;
+
+    /// <summary>Narrower profile for everybody reached only through this group.</summary>
+    public SharingProfile? ProfileOverride { get; set; }
 }
 
 /// <summary>How the radar window draws.</summary>
@@ -146,6 +173,9 @@ public sealed class Configuration : IPluginConfiguration
 
     public List<ContactSettings> Contacts { get; set; } = [];
 
+    /// <summary>Local settings for the groups you belong to.</summary>
+    public List<GroupSettings> Groups { get; set; } = [];
+
     /// <summary>
     /// Guards <see cref="Contacts"/>. The relay sync runs on the thread pool while the windows and the
     /// hub read the same list from the framework thread, so every access goes through the helpers below.
@@ -229,9 +259,64 @@ public sealed class Configuration : IPluginConfiguration
             return edit(Contacts);
     }
 
-    /// <summary>The profile that applies to one contact.</summary>
+    /// <summary>
+    /// The profile that applies to one contact: their own override first, then the override of a group
+    /// you reach them through, then the default. A direct contact is never narrowed by a group's profile,
+    /// because you linked with them personally.
+    /// </summary>
     public SharingProfile ProfileFor(ContactSettings contact)
-        => contact.ProfileOverride ?? DefaultProfile;
+    {
+        if (contact.ProfileOverride is { } personal)
+            return personal;
+
+        if (contact.IsDirectContact)
+            return DefaultProfile;
+
+        foreach (var groupId in contact.GroupIds)
+        {
+            if (FindGroup(groupId) is { ShareWithGroup: true, ProfileOverride: { } shared })
+                return shared;
+        }
+
+        return DefaultProfile;
+    }
+
+    public GroupSettings? FindGroup(string groupId)
+    {
+        lock (contactsLock)
+            return Groups.FirstOrDefault(g => string.Equals(g.GroupId, groupId, StringComparison.Ordinal));
+    }
+
+    public List<GroupSettings> SnapshotGroups()
+    {
+        lock (contactsLock)
+            return [.. Groups];
+    }
+
+    /// <summary>
+    /// Whether this contact should appear at all. Somebody reached only through a group you have hidden
+    /// stays hidden, without having to untick them one by one.
+    /// </summary>
+    public bool CanSee(ContactSettings contact)
+        => contact.ShowThem && ReachableBy(contact, group => group.ShowGroup);
+
+    /// <summary>Whether your presence should go to this contact.</summary>
+    public bool CanShareWith(ContactSettings contact)
+        => contact.ShareWithThem && ReachableBy(contact, group => group.ShareWithGroup);
+
+    private bool ReachableBy(ContactSettings contact, Func<GroupSettings, bool> groupAllows)
+    {
+        if (contact.IsDirectContact)
+            return true;
+
+        foreach (var groupId in contact.GroupIds)
+        {
+            if (FindGroup(groupId) is { } group && groupAllows(group))
+                return true;
+        }
+
+        return false;
+    }
 
     /// <summary>True while a manual pause is in effect.</summary>
     public bool IsPaused => PausedUntilUnixMs > DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();

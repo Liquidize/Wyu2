@@ -24,6 +24,8 @@ public sealed class MainWindow : Window
     private readonly Action openConfig;
 
     private string shareCodeInput = string.Empty;
+    private string groupNameInput = string.Empty;
+    private string groupCodeInput = string.Empty;
     private string inviteMessageInput = string.Empty;
     private string displayNameInput = string.Empty;
     private string relayUrlInput = string.Empty;
@@ -82,6 +84,12 @@ public sealed class MainWindow : Window
         {
             if (tab.Success)
                 DrawContacts();
+        }
+
+        using (var tab = ImRaii.TabItem(session.Groups.Count > 0 ? $"Groups ({session.Groups.Count})" : "Groups"))
+        {
+            if (tab.Success)
+                DrawGroups();
         }
 
         using (var tab = ImRaii.TabItem("Relay"))
@@ -177,7 +185,7 @@ public sealed class MainWindow : Window
 
         foreach (var friend in hub.Friends)
         {
-            if (!friend.Settings.ShowThem)
+            if (!config.CanSee(friend.Settings))
                 continue;
 
             DrawFriendRow(friend);
@@ -547,6 +555,16 @@ public sealed class MainWindow : Window
             ImGui.TableNextColumn();
             ImGui.TextUnformatted(string.IsNullOrWhiteSpace(contact.Alias) ? contact.DisplayName : contact.Alias!);
 
+            if (!contact.IsDirectContact && contact.GroupIds.Count > 0)
+            {
+                ImGui.SameLine();
+                var via = contact.GroupIds
+                    .Select(gid => config.FindGroup(gid)?.Name)
+                    .Where(n => !string.IsNullOrWhiteSpace(n));
+
+                UiHelpers.TextMuted($"via {string.Join(", ", via)}");
+            }
+
             ImGui.TableNextColumn();
             if (UiHelpers.Checkbox("##share", () => contact.ShareWithThem, v => contact.ShareWithThem = v))
             {
@@ -562,14 +580,18 @@ public sealed class MainWindow : Window
             DrawProfileSelector(contact);
 
             ImGui.TableNextColumn();
-            using (ImRaii.Disabled(busy))
+            using (ImRaii.Disabled(busy || !contact.IsDirectContact))
             {
                 if (ImGui.SmallButton("Remove"))
                     RunAsync(() => RemoveContactAsync(contact.AccountId));
             }
 
             if (ImGui.IsItemHovered())
-                ImGui.SetTooltip("Unlink completely. Neither of you can see the other afterwards.");
+            {
+                ImGui.SetTooltip(contact.IsDirectContact
+                    ? "Unlink completely. Neither of you can see the other afterwards."
+                    : "You only share a group with this person. Leave the group, or have its owner remove them.");
+            }
         }
     }
 
@@ -602,6 +624,189 @@ public sealed class MainWindow : Window
         if (ImGui.Selectable("Online only"))
         {
             contact.ProfileOverride = Configuration.SharingProfile.Minimal();
+            config.Save();
+        }
+    }
+
+    // ---------------------------------------------------------------- groups
+
+    private void DrawGroups()
+    {
+        if (!session.HasAccount)
+        {
+            ImGui.Spacing();
+            UiHelpers.TextMuted("Connect to a relay first - see the Relay tab.");
+            return;
+        }
+
+        ImGui.Spacing();
+        ImGui.TextWrapped(
+            "A group links everybody in it at once, so a static or a free company does not have to swap " +
+            "codes in pairs. Members can see each other exactly like direct contacts, and the same " +
+            "sharing settings apply.");
+
+        ImGui.Spacing();
+        ImGui.SetNextItemWidth(200f);
+        ImGui.InputTextWithHint("##groupname", "new group name", ref groupNameInput, 40);
+        ImGui.SameLine();
+        using (ImRaii.Disabled(busy || string.IsNullOrWhiteSpace(groupNameInput)))
+        {
+            if (ImGui.Button("Create"))
+                RunAsync(CreateGroupAsync);
+        }
+
+        ImGui.SameLine();
+        ImGui.SetCursorPosX(ImGui.GetCursorPosX() + 16f);
+        ImGui.SetNextItemWidth(220f);
+        ImGui.InputTextWithHint("##groupcode", "WY-XXXX-XXXX-XXXX-XXXX", ref groupCodeInput, 40);
+        ImGui.SameLine();
+        using (ImRaii.Disabled(busy || string.IsNullOrWhiteSpace(groupCodeInput)))
+        {
+            if (ImGui.Button("Join"))
+                RunAsync(JoinGroupAsync);
+        }
+
+        DrawStatusMessage();
+        ImGui.Separator();
+
+        if (session.Groups.Count == 0)
+        {
+            UiHelpers.TextMuted("You are not in any groups yet.");
+            return;
+        }
+
+        foreach (var group in session.Groups)
+            DrawGroup(group);
+    }
+
+    private void DrawGroup(GroupDto group)
+    {
+        using var id = ImRaii.PushId(group.GroupId);
+        var settings = config.FindGroup(group.GroupId);
+        var owned = string.Equals(group.OwnerAccountId, config.AccountId, StringComparison.Ordinal);
+
+        if (!ImGui.CollapsingHeader($"{group.Name} ({group.Members.Count})###{group.GroupId}"))
+            return;
+
+        ImGui.TextUnformatted("Join code");
+        ImGui.SameLine();
+        ImGui.TextColored(UiHelpers.Color(UiHelpers.Good), group.JoinCode);
+        ImGui.SameLine();
+        UiHelpers.CopyButton("Copy", group.JoinCode, "Copy this group's join code.");
+
+        if (owned)
+        {
+            ImGui.SameLine();
+            using (ImRaii.Disabled(busy))
+            {
+                if (ImGui.Button("New code"))
+                    RunAsync(() => RotateGroupCodeAsync(group.GroupId));
+            }
+
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("Invalidates the old code. Existing members stay in the group.");
+        }
+
+        if (settings is not null)
+        {
+            if (UiHelpers.Checkbox("Share my presence with this group", () => settings.ShareWithGroup,
+                    v => settings.ShareWithGroup = v))
+            {
+                config.Save();
+                hub.PublishNow();
+            }
+
+            if (UiHelpers.Checkbox("Show this group's members", () => settings.ShowGroup,
+                    v => settings.ShowGroup = v))
+            {
+                config.Save();
+            }
+
+            ImGui.SetNextItemWidth(160f);
+            DrawGroupProfileSelector(settings);
+        }
+
+        UiHelpers.TextMuted(owned ? "You own this group." : "Owned by somebody else.");
+
+        using (var table = ImRaii.Table("##members", owned ? 3 : 2,
+                   ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerH))
+        {
+            if (table.Success)
+            {
+                ImGui.TableSetupColumn("Member", ImGuiTableColumnFlags.WidthStretch);
+                ImGui.TableSetupColumn("Joined", ImGuiTableColumnFlags.WidthFixed, 90f);
+                if (owned)
+                    ImGui.TableSetupColumn(string.Empty, ImGuiTableColumnFlags.WidthFixed, 70f);
+
+                ImGui.TableHeadersRow();
+
+                foreach (var member in group.Members)
+                {
+                    using var memberId = ImRaii.PushId(member.AccountId);
+                    var isSelf = string.Equals(member.AccountId, config.AccountId, StringComparison.Ordinal);
+
+                    ImGui.TableNextRow();
+                    ImGui.TableNextColumn();
+                    ImGui.TextUnformatted(isSelf ? $"{member.DisplayName} (you)" : member.DisplayName);
+
+                    ImGui.TableNextColumn();
+                    UiHelpers.TextMuted(UiHelpers.FormatAge(
+                        DateTime.UtcNow - DateTimeOffset.FromUnixTimeMilliseconds(member.JoinedAtUnixMs).UtcDateTime));
+
+                    if (!owned)
+                        continue;
+
+                    ImGui.TableNextColumn();
+                    if (isSelf)
+                        continue;
+
+                    using (ImRaii.Disabled(busy))
+                    {
+                        if (ImGui.SmallButton("Remove"))
+                            RunAsync(() => RemoveGroupMemberAsync(group.GroupId, member.AccountId));
+                    }
+                }
+            }
+        }
+
+        using (ImRaii.Disabled(busy))
+        {
+            if (ImGui.Button("Leave group"))
+                RunAsync(() => LeaveGroupAsync(group.GroupId));
+        }
+
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip(owned
+                ? "The longest standing member takes it over. If you are the last one, it is disbanded."
+                : "You stop seeing the other members, and they stop seeing you.");
+        }
+
+        ImGui.Separator();
+    }
+
+    private void DrawGroupProfileSelector(Configuration.GroupSettings settings)
+    {
+        var current = settings.ProfileOverride is null ? "Default profile" : "Custom profile";
+        using var combo = ImRaii.Combo("##groupprofile", current);
+        if (!combo.Success)
+            return;
+
+        if (ImGui.Selectable("Default profile", settings.ProfileOverride is null))
+        {
+            settings.ProfileOverride = null;
+            config.Save();
+        }
+
+        if (ImGui.Selectable("Zone only"))
+        {
+            settings.ProfileOverride = Configuration.SharingProfile.ZoneOnly();
+            config.Save();
+        }
+
+        if (ImGui.Selectable("Online only"))
+        {
+            settings.ProfileOverride = Configuration.SharingProfile.Minimal();
             config.Save();
         }
     }
@@ -802,6 +1007,55 @@ public sealed class MainWindow : Window
     {
         var ok = await client.RemoveContactAsync(accountId).ConfigureAwait(false);
         statusMessage = ok ? "Contact removed." : client.LastError ?? "Could not remove that contact.";
+        await session.RefreshContactsAsync().ConfigureAwait(false);
+    }
+
+    private async Task CreateGroupAsync()
+    {
+        var group = await client.CreateGroupAsync(groupNameInput.Trim()).ConfigureAwait(false);
+        statusMessage = group is null
+            ? client.LastError ?? "Could not create that group."
+            : $"Created {group.Name}. Share the code {group.JoinCode}.";
+
+        if (group is not null)
+            groupNameInput = string.Empty;
+
+        await session.RefreshContactsAsync().ConfigureAwait(false);
+    }
+
+    private async Task JoinGroupAsync()
+    {
+        var group = await client.JoinGroupAsync(groupCodeInput.Trim()).ConfigureAwait(false);
+        statusMessage = group is null
+            ? client.LastError ?? "Could not join that group."
+            : $"Joined {group.Name}.";
+
+        if (group is not null)
+            groupCodeInput = string.Empty;
+
+        await session.RefreshContactsAsync().ConfigureAwait(false);
+    }
+
+    private async Task RotateGroupCodeAsync(string groupId)
+    {
+        var ok = await client.UpdateGroupAsync(groupId, new UpdateGroupRequest { RotateJoinCode = true })
+            .ConfigureAwait(false);
+
+        statusMessage = ok ? "New join code minted." : client.LastError ?? "Could not change the code.";
+        await session.RefreshContactsAsync().ConfigureAwait(false);
+    }
+
+    private async Task LeaveGroupAsync(string groupId)
+    {
+        var ok = await client.LeaveGroupAsync(groupId).ConfigureAwait(false);
+        statusMessage = ok ? "Left the group." : client.LastError ?? "Could not leave that group.";
+        await session.RefreshContactsAsync().ConfigureAwait(false);
+    }
+
+    private async Task RemoveGroupMemberAsync(string groupId, string accountId)
+    {
+        var ok = await client.RemoveGroupMemberAsync(groupId, accountId).ConfigureAwait(false);
+        statusMessage = ok ? "Member removed." : client.LastError ?? "Could not remove that member.";
         await session.RefreshContactsAsync().ConfigureAwait(false);
     }
 

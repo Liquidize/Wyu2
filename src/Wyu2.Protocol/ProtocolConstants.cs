@@ -34,4 +34,13 @@ public static class ProtocolConstants
 
     /// <summary>Info string mixed into the key derivation so keys are unique to this application.</summary>
     public const string KeyDerivationInfo = "Wyu2/v1/presence";
+
+    /// <summary>Maximum members in one group.</summary>
+    public const int MaxGroupMembers = 64;
+
+    /// <summary>Maximum groups one account may belong to.</summary>
+    public const int MaxGroupsPerAccount = 16;
+
+    /// <summary>Longest a group name may be.</summary>
+    public const int MaxGroupNameLength = 40;
 }

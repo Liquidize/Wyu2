@@ -45,6 +45,19 @@ public sealed class StoredPresence
     public long ExpiresAtUnixMs { get; init; }
 }
 
+/// <summary>A named set of accounts who can all see each other.</summary>
+public sealed class Group
+{
+    public required string Id { get; init; }
+    public required string Name { get; set; }
+    public required string OwnerAccountId { get; set; }
+    public required string JoinCode { get; set; }
+    public long CreatedAtUnixMs { get; init; }
+
+    /// <summary>Account id to the time they joined.</summary>
+    public Dictionary<string, long> Members { get; init; } = new(StringComparer.Ordinal);
+}
+
 /// <summary>Everything that survives a restart.</summary>
 internal sealed class RelaySnapshot
 {
@@ -53,4 +66,7 @@ internal sealed class RelaySnapshot
 
     [JsonPropertyName("requests")]
     public List<ContactRequest> Requests { get; init; } = [];
+
+    [JsonPropertyName("groups")]
+    public List<Group> Groups { get; init; } = [];
 }

@@ -28,6 +28,8 @@ public sealed class RelayStore
     private readonly Dictionary<string, string> accountsByTokenHash = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> accountsByShareCode = new(StringComparer.Ordinal);
     private readonly Dictionary<string, ContactRequest> requests = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Group> groups = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> groupsByJoinCode = new(StringComparer.Ordinal);
 
     /// <summary>recipient id -> sender id -> blob.</summary>
     private readonly Dictionary<string, Dictionary<string, StoredPresence>> presence = new(StringComparer.Ordinal);
@@ -195,6 +197,8 @@ public sealed class RelayStore
     {
         lock (sync)
         {
+            RemoveFromGroupsLocked(account.Id);
+
             foreach (var contactId in account.Contacts)
             {
                 if (accounts.TryGetValue(contactId, out var contact))
@@ -419,6 +423,255 @@ public sealed class RelayStore
         log.LogInformation("Linked {A} and {B}", a.Id, b.Id);
     }
 
+    // ---------------------------------------------------------------- groups
+
+    /// <summary>
+    /// Everyone this account may exchange presence with: mutual contacts plus everybody sharing a group
+    /// with them. Built once per call rather than asked per recipient, since a publish can address a
+    /// couple of hundred people.
+    /// </summary>
+    private HashSet<string> VisibleToLocked(Account account)
+    {
+        var visible = new HashSet<string>(account.Contacts, StringComparer.Ordinal);
+
+        foreach (var group in groups.Values)
+        {
+            if (!group.Members.ContainsKey(account.Id))
+                continue;
+
+            foreach (var member in group.Members.Keys)
+            {
+                if (!string.Equals(member, account.Id, StringComparison.Ordinal))
+                    visible.Add(member);
+            }
+        }
+
+        return visible;
+    }
+
+    public List<GroupDto> ListGroups(Account account)
+    {
+        lock (sync)
+        {
+            return groups.Values
+                .Where(g => g.Members.ContainsKey(account.Id))
+                .Select(DescribeLocked)
+                .OrderBy(g => g.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+    }
+
+    public (StoreResult Result, GroupDto? Group) CreateGroup(Account account, CreateGroupRequest request)
+    {
+        var name = SanitizeGroupName(request.Name);
+        if (name is null)
+            return (StoreResult.Invalid, null);
+
+        lock (sync)
+        {
+            if (groups.Values.Count(g => g.Members.ContainsKey(account.Id)) >= options.MaxGroups)
+                return (StoreResult.LimitReached, null);
+
+            var group = new Group
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                Name = name,
+                OwnerAccountId = account.Id,
+                JoinCode = NewUniqueJoinCode(),
+                CreatedAtUnixMs = Now,
+            };
+
+            group.Members[account.Id] = Now;
+            groups[group.Id] = group;
+            groupsByJoinCode[ShareCode.Normalize(group.JoinCode)!] = group.Id;
+            dirty = true;
+
+            log.LogInformation("Account {AccountId} created group {GroupId}", account.Id, group.Id);
+            return (StoreResult.Ok, DescribeLocked(group));
+        }
+    }
+
+    public (StoreResult Result, GroupDto? Group) JoinGroup(Account account, JoinGroupRequest request)
+    {
+        var normalized = ShareCode.Normalize(request.JoinCode);
+        if (normalized is null)
+            return (StoreResult.Invalid, null);
+
+        lock (sync)
+        {
+            if (!groupsByJoinCode.TryGetValue(normalized, out var groupId) ||
+                !groups.TryGetValue(groupId, out var group))
+            {
+                return (StoreResult.NotFound, null);
+            }
+
+            if (group.Members.ContainsKey(account.Id))
+                return (StoreResult.AlreadyExists, DescribeLocked(group));
+
+            if (group.Members.Count >= options.MaxGroupMembers)
+                return (StoreResult.LimitReached, null);
+
+            if (groups.Values.Count(g => g.Members.ContainsKey(account.Id)) >= options.MaxGroups)
+                return (StoreResult.LimitReached, null);
+
+            group.Members[account.Id] = Now;
+            dirty = true;
+
+            log.LogInformation("Account {AccountId} joined group {GroupId}", account.Id, group.Id);
+            return (StoreResult.Ok, DescribeLocked(group));
+        }
+    }
+
+    public StoreResult UpdateGroup(Account account, string groupId, UpdateGroupRequest request)
+    {
+        lock (sync)
+        {
+            if (!groups.TryGetValue(groupId, out var group) || !group.Members.ContainsKey(account.Id))
+                return StoreResult.NotFound;
+
+            if (!string.Equals(group.OwnerAccountId, account.Id, StringComparison.Ordinal))
+                return StoreResult.Invalid;
+
+            if (request.Name is not null)
+            {
+                var name = SanitizeGroupName(request.Name);
+                if (name is null)
+                    return StoreResult.Invalid;
+
+                group.Name = name;
+            }
+
+            if (request.RotateJoinCode)
+            {
+                groupsByJoinCode.Remove(ShareCode.Normalize(group.JoinCode)!);
+                group.JoinCode = NewUniqueJoinCode();
+                groupsByJoinCode[ShareCode.Normalize(group.JoinCode)!] = group.Id;
+            }
+
+            dirty = true;
+            return StoreResult.Ok;
+        }
+    }
+
+    /// <summary>Leaves a group, or removes somebody else from it when the caller owns it.</summary>
+    public StoreResult LeaveGroup(Account account, string groupId, string? memberId = null)
+    {
+        lock (sync)
+        {
+            if (!groups.TryGetValue(groupId, out var group) || !group.Members.ContainsKey(account.Id))
+                return StoreResult.NotFound;
+
+            var target = memberId ?? account.Id;
+            var removingSomebodyElse = !string.Equals(target, account.Id, StringComparison.Ordinal);
+
+            if (removingSomebodyElse && !string.Equals(group.OwnerAccountId, account.Id, StringComparison.Ordinal))
+                return StoreResult.Invalid;
+
+            if (!group.Members.Remove(target))
+                return StoreResult.NotFound;
+
+            DropPresenceBetweenLocked(target, group);
+            HandOverOrDisbandLocked(group, target);
+            dirty = true;
+            return StoreResult.Ok;
+        }
+    }
+
+    /// <summary>
+    /// Keeps a group with an owner. When the last member leaves the group goes with them rather than
+    /// lingering with a join code nobody owns.
+    /// </summary>
+    private void HandOverOrDisbandLocked(Group group, string departedId)
+    {
+        if (group.Members.Count == 0)
+        {
+            groupsByJoinCode.Remove(ShareCode.Normalize(group.JoinCode)!);
+            groups.Remove(group.Id);
+            log.LogInformation("Group {GroupId} disbanded", group.Id);
+            return;
+        }
+
+        if (!string.Equals(group.OwnerAccountId, departedId, StringComparison.Ordinal))
+            return;
+
+        // The longest standing member inherits it.
+        group.OwnerAccountId = group.Members.OrderBy(m => m.Value).First().Key;
+        log.LogInformation("Group {GroupId} handed to {AccountId}", group.Id, group.OwnerAccountId);
+    }
+
+    /// <summary>
+    /// Drops presence between somebody leaving a group and the members they can no longer see, unless
+    /// they are still linked some other way.
+    /// </summary>
+    private void DropPresenceBetweenLocked(string departedId, Group group)
+    {
+        if (!accounts.TryGetValue(departedId, out var departed))
+            return;
+
+        var stillVisible = VisibleToLocked(departed);
+
+        foreach (var memberId in group.Members.Keys)
+        {
+            if (stillVisible.Contains(memberId))
+                continue;
+
+            if (presence.TryGetValue(memberId, out var theirInbox))
+                theirInbox.Remove(departedId);
+
+            if (presence.TryGetValue(departedId, out var ourInbox))
+                ourInbox.Remove(memberId);
+        }
+    }
+
+    private GroupDto DescribeLocked(Group group) => new()
+    {
+        GroupId = group.Id,
+        Name = group.Name,
+        JoinCode = group.JoinCode,
+        OwnerAccountId = group.OwnerAccountId,
+        CreatedAtUnixMs = group.CreatedAtUnixMs,
+        Members = group.Members
+            .Select(m =>
+            {
+                accounts.TryGetValue(m.Key, out var member);
+                return new GroupMemberDto
+                {
+                    AccountId = m.Key,
+                    DisplayName = member?.DisplayName ?? "(unknown)",
+                    PublicKey = member?.PublicKey ?? string.Empty,
+                    JoinedAtUnixMs = m.Value,
+                };
+            })
+            .Where(m => m.PublicKey.Length > 0)
+            .OrderBy(m => m.JoinedAtUnixMs)
+            .ToList(),
+    };
+
+    private string NewUniqueJoinCode()
+    {
+        for (var attempt = 0; attempt < 16; attempt++)
+        {
+            var code = Protocol.ShareCode.Generate();
+            if (!groupsByJoinCode.ContainsKey(Protocol.ShareCode.Normalize(code)!))
+                return code;
+        }
+
+        throw new InvalidOperationException("Could not mint a unique join code.");
+    }
+
+    private static string? SanitizeGroupName(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return null;
+
+        var cleaned = new string(name.Trim()
+            .Where(c => !char.IsControl(c))
+            .Take(ProtocolConstants.MaxGroupNameLength)
+            .ToArray());
+
+        return string.IsNullOrWhiteSpace(cleaned) ? null : cleaned;
+    }
+
     // ---------------------------------------------------------------- presence
 
     public PublishPresenceResponse PublishPresence(Account account, PublishPresenceRequest request)
@@ -435,10 +688,13 @@ public sealed class RelayStore
 
         lock (sync)
         {
+            var visible = VisibleToLocked(account);
+
             foreach (var envelope in request.Envelopes.Take(ProtocolConstants.MaxRecipientsPerPublish))
             {
-                // Only mutual contacts may be addressed, and only sane sized blobs are parked.
-                if (!account.Contacts.Contains(envelope.RecipientAccountId) ||
+                // Only people you are linked with - a mutual contact or a fellow group member - may be
+                // addressed, and only sane sized blobs are parked.
+                if (!visible.Contains(envelope.RecipientAccountId) ||
                     envelope.Ciphertext.Length > ProtocolConstants.MaxEnvelopeBytes ||
                     envelope.Nonce.Length > 32 ||
                     string.IsNullOrEmpty(envelope.Ciphertext))
@@ -468,7 +724,7 @@ public sealed class RelayStore
                 Accepted = accepted,
                 Rejected = rejected,
                 ServerTimeUnixMs = now,
-                ActiveRecipients = account.Contacts
+                ActiveRecipients = visible
                     .Where(id => accounts.TryGetValue(id, out var c) && now - c.LastSeenAtUnixMs < 5 * 60_000)
                     .ToList(),
             };
@@ -484,9 +740,11 @@ public sealed class RelayStore
             if (!presence.TryGetValue(account.Id, out var inbox))
                 return response;
 
+            var visible = VisibleToLocked(account);
+
             foreach (var (senderId, blob) in inbox.ToList())
             {
-                if (blob.ExpiresAtUnixMs <= now || !account.Contacts.Contains(senderId))
+                if (blob.ExpiresAtUnixMs <= now || !visible.Contains(senderId))
                 {
                     inbox.Remove(senderId);
                     continue;
@@ -569,6 +827,8 @@ public sealed class RelayStore
 
     private void DeleteAccountLocked(Account account)
     {
+        RemoveFromGroupsLocked(account.Id);
+
         foreach (var contactId in account.Contacts)
         {
             if (accounts.TryGetValue(contactId, out var contact))
@@ -591,6 +851,16 @@ public sealed class RelayStore
         accounts.Remove(account.Id);
     }
 
+    /// <summary>Takes an account out of every group it belongs to, handing over or disbanding as needed.</summary>
+    private void RemoveFromGroupsLocked(string accountId)
+    {
+        foreach (var group in groups.Values.Where(g => g.Members.ContainsKey(accountId)).ToList())
+        {
+            group.Members.Remove(accountId);
+            HandOverOrDisbandLocked(group, accountId);
+        }
+    }
+
     // ---------------------------------------------------------------- persistence
 
     /// <summary>Writes the account graph to disk if anything changed. Presence is deliberately excluded.</summary>
@@ -606,6 +876,7 @@ public sealed class RelayStore
             {
                 Accounts = accounts.Values.ToList(),
                 Requests = requests.Values.ToList(),
+                Groups = groups.Values.ToList(),
             };
             dirty = false;
         }
@@ -652,8 +923,17 @@ public sealed class RelayStore
             foreach (var request in snapshot.Requests)
                 requests[request.Id] = request;
 
+            foreach (var group in snapshot.Groups)
+            {
+                groups[group.Id] = group;
+                var normalized = ShareCode.Normalize(group.JoinCode);
+                if (normalized is not null)
+                    groupsByJoinCode[normalized] = group.Id;
+            }
+
             log.LogInformation(
-                "Loaded {Accounts} accounts and {Requests} pending requests", accounts.Count, requests.Count);
+                "Loaded {Accounts} accounts, {Requests} pending requests and {Groups} groups",
+                accounts.Count, requests.Count, groups.Count);
         }
         catch (Exception ex)
         {

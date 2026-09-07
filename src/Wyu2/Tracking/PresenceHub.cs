@@ -136,7 +136,7 @@ public sealed class PresenceHub : IDisposable
         }
 
         var recipients = config.SnapshotContacts()
-            .Where(c => c.ShareWithThem && !string.IsNullOrEmpty(c.PublicKey))
+            .Where(c => config.CanShareWith(c) && !string.IsNullOrEmpty(c.PublicKey))
             .Select(c => (c.AccountId, c.PublicKey, Profile: config.ProfileFor(c)))
             .ToList();
 
@@ -188,7 +188,7 @@ public sealed class PresenceHub : IDisposable
         foreach (var entry in response.Entries)
         {
             var contact = config.FindContact(entry.SenderAccountId);
-            if (contact is null || !contact.ShowThem || string.IsNullOrEmpty(contact.PublicKey))
+            if (contact is null || !config.CanSee(contact) || string.IsNullOrEmpty(contact.PublicKey))
                 continue;
 
             var key = session.GetInboundKey(entry.SenderAccountId, contact.PublicKey);

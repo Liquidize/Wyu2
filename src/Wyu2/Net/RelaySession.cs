@@ -29,6 +29,9 @@ public sealed class RelaySession : IDisposable
     /// <summary>Invites waiting in either direction.</summary>
     public IReadOnlyList<ContactRequestDto> Requests { get; private set; } = [];
 
+    /// <summary>Groups as the relay last reported them.</summary>
+    public IReadOnlyList<GroupDto> Groups { get; private set; } = [];
+
     public DateTime? ContactsRefreshedAt { get; private set; }
 
     public bool HasAccount => config.HasRelayAccount && keys is not null;
@@ -111,10 +114,12 @@ public sealed class RelaySession : IDisposable
             contacts.Clear();
             return true;
         });
+        config.Groups.Clear();
         config.Save();
 
         Contacts = [];
         Requests = [];
+        Groups = [];
         client.Invalidate();
         ReloadKeys();
     }
@@ -130,55 +135,141 @@ public sealed class RelaySession : IDisposable
             return false;
 
         var requests = await client.GetContactRequestsAsync(token).ConfigureAwait(false) ?? [];
+        var groups = await client.GetGroupsAsync(token).ConfigureAwait(false) ?? [];
 
         Contacts = contacts;
         Requests = requests;
+        Groups = groups;
         ContactsRefreshedAt = DateTime.UtcNow;
 
-        var changed = config.EditContacts(list =>
-        {
-            var dirty = false;
-            foreach (var contact in contacts)
-            {
-                var settings = list.FirstOrDefault(
-                    c => string.Equals(c.AccountId, contact.AccountId, StringComparison.Ordinal));
-
-                if (settings is null)
-                {
-                    list.Add(new Configuration.ContactSettings
-                    {
-                        AccountId = contact.AccountId,
-                        DisplayName = contact.DisplayName,
-                        PublicKey = contact.PublicKey,
-                    });
-                    dirty = true;
-                    continue;
-                }
-
-                if (settings.DisplayName != contact.DisplayName)
-                {
-                    settings.DisplayName = contact.DisplayName;
-                    dirty = true;
-                }
-
-                if (settings.PublicKey != contact.PublicKey)
-                {
-                    // Derived keys are cached under the public key they came from, so a rotation simply
-                    // misses the cache rather than serving a stale secret.
-                    settings.PublicKey = contact.PublicKey;
-                    dirty = true;
-                }
-            }
-
-            // Anybody the relay no longer lists has unlinked; drop their local settings too.
-            var live = contacts.Select(c => c.AccountId).ToHashSet(StringComparer.Ordinal);
-            return list.RemoveAll(c => !live.Contains(c.AccountId)) > 0 || dirty;
-        });
+        var changed = MergeIntoConfiguration(contacts, groups);
 
         if (changed)
             config.Save();
 
         return true;
+    }
+
+    /// <summary>
+    /// Folds the relay's view of who you can see into the local settings. Somebody may be reachable
+    /// directly, through a group, or both, and that provenance is recorded so removing one link does not
+    /// silently drop the other.
+    /// </summary>
+    private bool MergeIntoConfiguration(List<ContactDto> contacts, List<GroupDto> groups)
+    {
+        // Everybody the relay says we can see, and why.
+        var reachable = new Dictionary<string, (string DisplayName, string PublicKey, bool Direct, List<string> Groups)>(
+            StringComparer.Ordinal);
+
+        foreach (var contact in contacts)
+            reachable[contact.AccountId] = (contact.DisplayName, contact.PublicKey, true, []);
+
+        foreach (var group in groups)
+        {
+            foreach (var member in group.Members)
+            {
+                if (string.Equals(member.AccountId, config.AccountId, StringComparison.Ordinal))
+                    continue;
+
+                if (reachable.TryGetValue(member.AccountId, out var existing))
+                {
+                    existing.Groups.Add(group.GroupId);
+                    reachable[member.AccountId] = existing;
+                }
+                else
+                {
+                    reachable[member.AccountId] = (member.DisplayName, member.PublicKey, false, [group.GroupId]);
+                }
+            }
+        }
+
+        return config.EditContacts(list =>
+        {
+            var dirty = false;
+
+            foreach (var (accountId, info) in reachable)
+            {
+                var settings = list.FirstOrDefault(
+                    c => string.Equals(c.AccountId, accountId, StringComparison.Ordinal));
+
+                if (settings is null)
+                {
+                    list.Add(new Configuration.ContactSettings
+                    {
+                        AccountId = accountId,
+                        DisplayName = info.DisplayName,
+                        PublicKey = info.PublicKey,
+                        IsDirectContact = info.Direct,
+                        GroupIds = info.Groups,
+                    });
+                    dirty = true;
+                    continue;
+                }
+
+                if (settings.DisplayName != info.DisplayName)
+                {
+                    settings.DisplayName = info.DisplayName;
+                    dirty = true;
+                }
+
+                if (settings.PublicKey != info.PublicKey)
+                {
+                    // Derived keys are cached under the public key they came from, so a rotation simply
+                    // misses the cache rather than serving a stale secret.
+                    settings.PublicKey = info.PublicKey;
+                    dirty = true;
+                }
+
+                if (settings.IsDirectContact != info.Direct)
+                {
+                    settings.IsDirectContact = info.Direct;
+                    dirty = true;
+                }
+
+                if (!settings.GroupIds.SequenceEqual(info.Groups, StringComparer.Ordinal))
+                {
+                    settings.GroupIds = info.Groups;
+                    dirty = true;
+                }
+            }
+
+            // Anybody the relay no longer lists has unlinked or left every shared group.
+            if (list.RemoveAll(c => !reachable.ContainsKey(c.AccountId)) > 0)
+                dirty = true;
+
+            return dirty;
+        }) | MergeGroupSettings(groups);
+    }
+
+    /// <summary>Keeps the local group settings in step with the relay's list.</summary>
+    private bool MergeGroupSettings(List<GroupDto> groups)
+    {
+        var dirty = false;
+
+        foreach (var group in groups)
+        {
+            var settings = config.FindGroup(group.GroupId);
+            if (settings is null)
+            {
+                config.Groups.Add(new Configuration.GroupSettings
+                {
+                    GroupId = group.GroupId,
+                    Name = group.Name,
+                });
+                dirty = true;
+            }
+            else if (settings.Name != group.Name)
+            {
+                settings.Name = group.Name;
+                dirty = true;
+            }
+        }
+
+        var live = groups.Select(g => g.GroupId).ToHashSet(StringComparer.Ordinal);
+        if (config.Groups.RemoveAll(g => !live.Contains(g.GroupId)) > 0)
+            dirty = true;
+
+        return dirty;
     }
 
     /// <summary>Key used to encrypt payloads we send to a contact.</summary>

@@ -160,6 +160,26 @@ public sealed class RelayClient : IDisposable
     public Task<bool> RemoveContactAsync(string accountId, CancellationToken token = default)
         => SendVoidAsync(HttpMethod.Delete, $"v1/contacts/{accountId}", null, token);
 
+    public Task<List<GroupDto>?> GetGroupsAsync(CancellationToken token = default)
+        => SendAsync<List<GroupDto>>(HttpMethod.Get, "v1/groups", null, requireAuth: true, token);
+
+    public Task<GroupDto?> CreateGroupAsync(string name, CancellationToken token = default)
+        => SendAsync<GroupDto>(HttpMethod.Post, "v1/groups", new CreateGroupRequest { Name = name },
+            requireAuth: true, token);
+
+    public Task<GroupDto?> JoinGroupAsync(string joinCode, CancellationToken token = default)
+        => SendAsync<GroupDto>(HttpMethod.Post, "v1/groups/join", new JoinGroupRequest { JoinCode = joinCode },
+            requireAuth: true, token);
+
+    public Task<bool> UpdateGroupAsync(string groupId, UpdateGroupRequest request, CancellationToken token = default)
+        => SendVoidAsync(HttpMethod.Patch, $"v1/groups/{groupId}", request, token);
+
+    public Task<bool> LeaveGroupAsync(string groupId, CancellationToken token = default)
+        => SendVoidAsync(HttpMethod.Delete, $"v1/groups/{groupId}", null, token);
+
+    public Task<bool> RemoveGroupMemberAsync(string groupId, string accountId, CancellationToken token = default)
+        => SendVoidAsync(HttpMethod.Delete, $"v1/groups/{groupId}/members/{accountId}", null, token);
+
     public Task<PublishPresenceResponse?> PublishPresenceAsync(
         PublishPresenceRequest request, CancellationToken token = default)
         => SendAsync<PublishPresenceResponse>(HttpMethod.Post, "v1/presence", request, requireAuth: true, token);

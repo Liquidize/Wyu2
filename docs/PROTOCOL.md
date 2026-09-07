@@ -21,6 +21,9 @@ and the relay, so they cannot drift.
 | Maximum envelope size | 8 KiB |
 | Maximum recipients per publish | 200 |
 | Maximum display name | 48 characters |
+| Maximum group name | 40 characters |
+| Members per group | 64 |
+| Groups per account | 16 |
 | Default rate limit | 240 requests/minute per token (per IP before authentication) |
 
 ## Endpoints
@@ -71,10 +74,35 @@ Links both accounts. Only the recipient of an invite may accept it.
 ### `POST /v1/contacts/requests/{requestId}/decline`
 Declines an incoming invite, or withdraws one you sent.
 
+### `GET /v1/groups`
+Array of `GroupDto` for the groups you belong to, each with its join code and its members' public keys.
+
+### `POST /v1/groups`
+Body `CreateGroupRequest { name }`. You become the owner and first member.
+
+### `POST /v1/groups/join`
+Body `JoinGroupRequest { joinCode }`. Joining a group you are already in returns the group unchanged
+rather than an error.
+
+### `PATCH /v1/groups/{groupId}`
+Body `UpdateGroupRequest { name?, rotateJoinCode? }`. Owner only. Rotating the code invalidates the old
+one; existing members are unaffected.
+
+### `DELETE /v1/groups/{groupId}`
+Leaves the group. When the owner leaves, the longest standing member takes it over; when the last member
+leaves, the group and its join code are removed rather than lingering ownerless.
+
+### `DELETE /v1/groups/{groupId}/members/{accountId}`
+Removes somebody else. Owner only.
+
+Leaving or being removed drops any presence parked between you and the members you can no longer see,
+unless you are still linked to them another way.
+
 ### `POST /v1/presence`
 Body `PublishPresenceRequest { ttlSeconds, envelopes: [ { recipientAccountId, nonce, ciphertext } ] }`.
 
-Envelopes addressed to anybody who is not a mutual contact are rejected, as are oversized ones. Each
+Envelopes addressed to anybody you are not linked with - a mutual contact or a fellow group member -
+are rejected, as are oversized ones. Each
 recipient holds exactly one blob per sender: publishing again replaces the previous one.
 
 Returns `{ accepted, rejected, serverTimeUnixMs, activeRecipients }`. `activeRecipients` lists contacts

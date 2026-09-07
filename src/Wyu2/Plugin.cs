@@ -150,7 +150,7 @@ public sealed class Plugin : IDalamudPlugin
         if (!config.ShowDtrEntry)
             return;
 
-        var online = hub.Friends.Count(f => f.Settings.ShowThem && f.IsOnline);
+        var online = hub.Friends.Count(f => config.CanSee(f.Settings) && f.IsOnline);
         dtrEntry.Text = $"Wyu2 {online}";
         dtrEntry.Tooltip = config.SharingEnabled
             ? $"{online} contact(s) sharing with you. {SelfSnapshotBuilder.Explain(hub.BlockReason)}."

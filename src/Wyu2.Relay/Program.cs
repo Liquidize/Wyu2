@@ -140,6 +140,59 @@ app.MapPost("/v1/contacts/requests/{requestId}/decline", (string requestId, Http
         : Fail(404, "not_found", "No such invite."))
     .RequireAccount();
 
+// ---------------------------------------------------------------- groups
+
+app.MapGet("/v1/groups", (HttpContext http, RelayStore store) => Results.Ok(store.ListGroups(http.Account())))
+    .RequireAccount();
+
+app.MapPost("/v1/groups", (CreateGroupRequest body, HttpContext http, RelayStore store) =>
+{
+    var (result, group) = store.CreateGroup(http.Account(), body);
+    return result switch
+    {
+        StoreResult.Ok => Results.Ok(group),
+        StoreResult.LimitReached => Fail(429, "limit_reached", "You are in as many groups as this relay allows."),
+        _ => Fail(400, "invalid_request", "That group name was rejected."),
+    };
+}).RequireAccount();
+
+app.MapPost("/v1/groups/join", (JoinGroupRequest body, HttpContext http, RelayStore store) =>
+{
+    var (result, group) = store.JoinGroup(http.Account(), body);
+    return result switch
+    {
+        StoreResult.Ok or StoreResult.AlreadyExists => Results.Ok(group),
+        StoreResult.NotFound => Fail(404, "unknown_code", "No group uses that join code."),
+        StoreResult.LimitReached => Fail(429, "limit_reached", "That group is full, or you are in too many."),
+        _ => Fail(400, "invalid_code", "That join code is not valid."),
+    };
+}).RequireAccount();
+
+app.MapPatch("/v1/groups/{groupId}", (string groupId, UpdateGroupRequest body, HttpContext http, RelayStore store) =>
+    store.UpdateGroup(http.Account(), groupId, body) switch
+    {
+        StoreResult.Ok => Results.NoContent(),
+        StoreResult.Invalid => Fail(403, "not_owner", "Only the group's owner can change it."),
+        _ => Fail(404, "not_found", "No such group."),
+    })
+    .RequireAccount();
+
+app.MapDelete("/v1/groups/{groupId}", (string groupId, HttpContext http, RelayStore store) =>
+    store.LeaveGroup(http.Account(), groupId) == StoreResult.Ok
+        ? Results.NoContent()
+        : Fail(404, "not_found", "You are not in that group."))
+    .RequireAccount();
+
+app.MapDelete("/v1/groups/{groupId}/members/{memberId}",
+    (string groupId, string memberId, HttpContext http, RelayStore store) =>
+        store.LeaveGroup(http.Account(), groupId, memberId) switch
+        {
+            StoreResult.Ok => Results.NoContent(),
+            StoreResult.Invalid => Fail(403, "not_owner", "Only the group's owner can remove members."),
+            _ => Fail(404, "not_found", "No such group or member."),
+        })
+    .RequireAccount();
+
 // ---------------------------------------------------------------- presence
 
 app.MapPost("/v1/presence", (PublishPresenceRequest request, HttpContext http, RelayStore store) =>

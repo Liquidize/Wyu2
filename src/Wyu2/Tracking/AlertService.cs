@@ -44,7 +44,7 @@ public sealed unsafe class AlertService(Configuration.Configuration config, Game
 
             previous[friend.AccountId] = current;
 
-            if (!config.AlertsEnabled || !friend.Settings.ShowThem)
+            if (!config.AlertsEnabled || !config.CanSee(friend.Settings))
                 continue;
 
             var wanted = friend.Settings.Alerts;
