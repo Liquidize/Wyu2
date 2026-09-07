@@ -4,6 +4,7 @@ using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
 using Wyu2.Configuration;
 using Wyu2.Model;
+using Wyu2.Game;
 using Wyu2.Net;
 using Wyu2.Protocol;
 using Wyu2.Tracking;
@@ -18,6 +19,8 @@ public sealed class MainWindow : Window
     private readonly RelaySession session;
     private readonly RelayClient client;
     private readonly ZoneMapWindow mapWindow;
+    private readonly AetheryteFinder aetherytes;
+    private readonly TeleporterIpc teleporter;
     private readonly Action openConfig;
 
     private string shareCodeInput = string.Empty;
@@ -34,6 +37,8 @@ public sealed class MainWindow : Window
         RelaySession session,
         RelayClient client,
         ZoneMapWindow mapWindow,
+        AetheryteFinder aetherytes,
+        TeleporterIpc teleporter,
         Action openConfig)
         : base("Wyu2##wyu2-main")
     {
@@ -42,6 +47,8 @@ public sealed class MainWindow : Window
         this.session = session;
         this.client = client;
         this.mapWindow = mapWindow;
+        this.aetherytes = aetherytes;
+        this.teleporter = teleporter;
         this.openConfig = openConfig;
 
         Size = new Vector2(720f, 460f);
@@ -358,11 +365,46 @@ public sealed class MainWindow : Window
         AlertToggle(settings, AlertTriggers.EnteredDuty, "start a duty");
         AlertToggle(settings, AlertTriggers.LeftDuty, "finish a duty");
 
+        DrawTeleportItem(friend);
+
         if (ImGui.MenuItem("Hide from radar and list"))
         {
             settings.ShowThem = false;
             config.Save();
         }
+    }
+
+    /// <summary>
+    /// Offers the closest aetheryte you are attuned to. Without the Teleporter plugin this still names
+    /// the aetheryte, which is the useful half of the answer.
+    /// </summary>
+    private void DrawTeleportItem(TrackedFriend friend)
+    {
+        if (friend.Payload?.TerritoryTypeId is not { } territory)
+            return;
+
+        var nearest = aetherytes.Find(territory, friend.Position);
+        if (nearest is null)
+            return;
+
+        ImGui.Separator();
+        var distance = nearest.DistanceYalms >= float.MaxValue
+            ? string.Empty
+            : $" - {nearest.DistanceYalms:0}y away";
+
+        if (ImGui.MenuItem($"Teleport to {nearest.Name}{distance}"))
+        {
+            if (!teleporter.TryTeleport(nearest.AetheryteId, nearest.SubIndex))
+            {
+                Service.Chat.Print(
+                    $"Nearest aetheryte to {friend.Name} is {nearest.Name}. " +
+                    (teleporter.LastError ?? string.Empty),
+                    "Wyu2");
+            }
+        }
+
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip($"{nearest.GilCost} gil. Needs the Teleporter plugin to actually cast it.");
     }
 
     /// <summary>One bit of a contact's alert mask.</summary>

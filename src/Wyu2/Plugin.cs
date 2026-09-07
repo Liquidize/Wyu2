@@ -30,6 +30,8 @@ public sealed class Plugin : IDalamudPlugin
     private readonly ConfigWindow configWindow;
     private readonly WorldOverlay overlay;
     private readonly AlertService alerts;
+    private readonly AetheryteFinder aetherytes;
+    private readonly TeleporterIpc teleporter;
     private readonly IDtrBarEntry dtrEntry;
 
     public Plugin(IDalamudPluginInterface pluginInterface)
@@ -46,6 +48,8 @@ public sealed class Plugin : IDalamudPlugin
         scanner = new NearbyScanner(config);
 
         alerts = new AlertService(config, data);
+        aetherytes = new AetheryteFinder();
+        teleporter = new TeleporterIpc();
         var activity = new ActivityResolver(data);
         var snapshots = new SelfSnapshotBuilder(config, data, activity);
         hub = new PresenceHub(config, client, session, snapshots, scanner, data);
@@ -53,7 +57,8 @@ public sealed class Plugin : IDalamudPlugin
         mapWindow = new ZoneMapWindow(config, hub, data);
         radarWindow = new RadarWindow(config, hub, scanner);
         configWindow = new ConfigWindow(config, hub, data);
-        mainWindow = new MainWindow(config, hub, session, client, mapWindow, () => configWindow.IsOpen = true);
+        mainWindow = new MainWindow(
+            config, hub, session, client, mapWindow, aetherytes, teleporter, () => configWindow.IsOpen = true);
         overlay = new WorldOverlay(config, hub);
 
         windows.AddWindow(mainWindow);

@@ -20,6 +20,7 @@ internal sealed class Service
     [PluginService] internal static IDutyState DutyState { get; private set; } = null!;
     [PluginService] internal static IFateTable Fates { get; private set; } = null!;
     [PluginService] internal static IPartyList Party { get; private set; } = null!;
+    [PluginService] internal static IAetheryteList Aetherytes { get; private set; } = null!;
     [PluginService] internal static IDataManager Data { get; private set; } = null!;
     [PluginService] internal static IGameGui GameGui { get; private set; } = null!;
     [PluginService] internal static IChatGui Chat { get; private set; } = null!;
