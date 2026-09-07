@@ -1,23 +1,69 @@
+# Wyu2 relay.
+#
+#   cp .env.example .env      # edit it
+#   docker compose up -d      # relay on 127.0.0.1:8080, put your own proxy in front
+#
+# Or let Caddy handle TLS for you (set WYU2_DOMAIN in .env first):
+#
+#   docker compose --profile tls up -d
+#
+name: wyu2
+
 services:
   relay:
     build:
       context: .
-      dockerfile: src/FriendRadar.Relay/Dockerfile
+      dockerfile: src/Wyu2.Relay/Dockerfile
+    image: wyu2-relay:local
+    container_name: wyu2-relay
     restart: unless-stopped
-    ports:
-      # Bind to localhost and put a TLS terminating reverse proxy in front of it.
-      - "127.0.0.1:8080:8080"
-    volumes:
-      - relay-data:/data
     environment:
-      Relay__Name: "My FriendRadar relay"
-      Relay__Operator: "someone@example.com"
-      Relay__RegistrationOpen: "true"
-      # Close registration and hand out codes instead:
-      # Relay__RegistrationOpen: "false"
-      # Relay__InviteCodes__0: "my-static-invite-code"
-      Relay__MaxAccounts: "0"
-      Relay__RequestsPerMinute: "240"
+      Relay__Name: ${WYU2_RELAY_NAME:-Wyu2 relay}
+      Relay__Operator: ${WYU2_RELAY_OPERATOR:-}
+      Relay__Message: ${WYU2_RELAY_MESSAGE:-}
+      Relay__RegistrationOpen: ${WYU2_REGISTRATION_OPEN:-true}
+      Relay__InviteCodes__0: ${WYU2_INVITE_CODE:-}
+      Relay__MaxAccounts: ${WYU2_MAX_ACCOUNTS:-0}
+      Relay__MaxContacts: ${WYU2_MAX_CONTACTS:-200}
+      Relay__RequestsPerMinute: ${WYU2_REQUESTS_PER_MINUTE:-240}
+      Relay__AccountRetentionDays: ${WYU2_ACCOUNT_RETENTION_DAYS:-90}
+      # The relay sits behind a proxy in both layouts below, so trust its forwarded headers.
+      ASPNETCORE_FORWARDEDHEADERS_ENABLED: "true"
+    volumes:
+      # Accounts and links only. Presence never touches disk.
+      - relay-data:/data
+    ports:
+      # Loopback by default: nothing is exposed to the internet until you put TLS in front.
+      - "${WYU2_BIND:-127.0.0.1:8080}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Optional: automatic HTTPS via Let's Encrypt. Enable with --profile tls.
+  caddy:
+    image: caddy:2-alpine
+    container_name: wyu2-caddy
+    profiles: ["tls"]
+    restart: unless-stopped
+    depends_on:
+      relay:
+        condition: service_healthy
+    environment:
+      WYU2_DOMAIN: ${WYU2_DOMAIN:?set WYU2_DOMAIN in .env to use the tls profile}
+      WYU2_ACME_EMAIL: ${WYU2_ACME_EMAIL:-}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
 
 volumes:
   relay-data:
+  caddy-data:
+  caddy-config:

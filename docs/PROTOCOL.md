@@ -1,13 +1,13 @@
 # Relay protocol v1
 
-JSON over HTTP. The contracts live in `src/FriendRadar.Protocol` and are compiled into both the plugin
+JSON over HTTP. The contracts live in `src/Wyu2.Protocol` and are compiled into both the plugin
 and the relay, so they cannot drift.
 
 ## Conventions
 
 - All bodies are JSON, camel-cased.
 - Authenticated calls send `Authorization: Bearer <access token>`.
-- Clients send `X-FriendRadar-Protocol: 1` and `X-FriendRadar-Client: <plugin version>`.
+- Clients send `X-Wyu2-Protocol: 1` and `X-Wyu2-Client: <plugin version>`.
 - Errors return `{ "code": "...", "message": "..." }` with a matching HTTP status.
 - Timestamps are unix milliseconds, UTC.
 
@@ -95,7 +95,7 @@ nonce      = 12 random bytes,        base64
 ciphertext = AES-256-GCM output || 16 byte tag, base64
 key        = HKDF-SHA256(
                ikm  = ECDH-P256(self private, other public) hashed with SHA-256,
-               info = "FriendRadar/v1/presence|<senderAccountId>|<recipientAccountId>",
+               info = "Wyu2/v1/presence|<senderAccountId>|<recipientAccountId>",
                len  = 32)
 aad        = "1|<senderAccountId>|<recipientAccountId>"
 ```

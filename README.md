@@ -1,10 +1,12 @@
-# FriendRadar
+# Wyu2
+
+*What you up to?*
 
 A Dalamud plugin for FINAL FANTASY XIV that shows you where your friends are and what they are doing —
 on a radar, on the zone map, and in a live activity list. Nobody appears until they opt in, and you
 decide field by field what you send back.
 
-> FriendRadar only shares what its users deliberately choose to share, with people they have both
+> Wyu2 only shares what its users deliberately choose to share, with people they have both
 > agreed to link with. It is not a tool for tracking players who have not opted in.
 
 ---
@@ -38,7 +40,7 @@ showing how many contacts are online.
 ## How the opt-in works
 
 1. Both people install the plugin and point it at the same relay.
-2. Each gets a share code that looks like `FR-9GQ4-K72M-XPZ1-D8V0`.
+2. Each gets a share code that looks like `WY-9GQ4-K72M-XPZ1-D8V0`.
 3. One pastes the other's code and sends an invite. Nothing flows yet.
 4. The other accepts. Now you are linked — and either of you can unlink at any time, which immediately
    deletes anything the relay was holding between you.
@@ -70,61 +72,101 @@ renders on screen. It is **off by default and should stay off** unless everyone 
 
 ## Installing
 
-The plugin is not in the official Dalamud repository. Build it and load it as a dev plugin:
+Wyu2 is not in the official Dalamud repository. Add it as a custom one:
+
+```
+https://github.com/Liquidize/Wyu2/releases/latest/download/repo.json
+```
+
+`/xlsettings` → **Experimental** → *Custom Plugin Repositories* → paste that URL → Save, then install
+**Wyu2** from `/xlplugins`. The URL always resolves to the newest release, so it never needs changing.
+
+<details>
+<summary>Building it yourself instead</summary>
 
 ```bash
 git clone https://github.com/Liquidize/Wyu2.git
 cd Wyu2
-dotnet build src/FriendRadar/FriendRadar.csproj -c Release
+dotnet build src/Wyu2/Wyu2.csproj -c Release
 ```
 
-Then in-game: `/xlsettings` → Experimental → **Dev Plugin Locations** → add
-`Wyu2/src/FriendRadar/bin/Release/FriendRadar.dll`, and enable it in `/xlplugins` → Dev Tools.
+Then `/xlsettings` → Experimental → **Dev Plugin Locations** → add
+`Wyu2/src/Wyu2/bin/Release/Wyu2.dll`, and enable it in `/xlplugins` → Dev Tools.
 
 The build needs Dalamud's reference assemblies. It finds them automatically in the usual XIVLauncher
 location; otherwise pass `-p:DalamudLibPath=/path/to/dalamud/dev/` or set `DALAMUD_HOME`.
+</details>
 
 ## Using it
 
 | Command | Does |
 | --- | --- |
-| `/friendradar` (or `/frad`) | Open the friend list |
-| `/friendradar radar` | Toggle the radar |
-| `/friendradar map` | Toggle the zone map |
-| `/friendradar config` | Open settings |
-| `/friendradar share on\|off` | Start or stop sharing |
-| `/friendradar pause [minutes]` | Pause sharing, 15 minutes by default |
-| `/friendradar note <text>` | Set your status note |
+| `/wyu2` (or `/wyu`) | Open the friend list |
+| `/wyu2 radar` | Toggle the radar |
+| `/wyu2 map` | Toggle the zone map |
+| `/wyu2 config` | Open settings |
+| `/wyu2 share on\|off` | Start or stop sharing |
+| `/wyu2 pause [minutes]` | Pause sharing, 15 minutes by default |
+| `/wyu2 note <text>` | Set your status note |
 
 ## Running a relay
 
-The relay is a small ASP.NET Core service in this repository. It needs no database and holds no
-readable location data.
+Wyu2 needs a relay to pass updates between clients. One ships with this repository: a small ASP.NET Core
+service with no database, which only ever handles blobs it cannot decrypt.
 
 ```bash
-docker compose up -d          # http://localhost:8080, put TLS in front of it
-# or
-dotnet run --project src/FriendRadar.Relay
+cp .env.example .env      # name it, decide whether registration is open
+docker compose up -d      # listens on 127.0.0.1:8080
 ```
 
-Point the plugin at its URL on the **Relay** tab. See [docs/SELF_HOSTING.md](docs/SELF_HOSTING.md) for
-configuration, invite-only mode, retention and reverse proxy notes, and
-[docs/PROTOCOL.md](docs/PROTOCOL.md) for the wire format.
+That leaves TLS to you. To let the stack handle it, set `WYU2_DOMAIN` (and point its DNS at the box)
+and bring up the bundled Caddy:
+
+```bash
+docker compose --profile tls up -d
+```
+
+Caddy fetches a certificate from Let's Encrypt and proxies `https://$WYU2_DOMAIN` to the relay. Either
+way, paste the URL into the plugin's **Relay** tab and create an account.
+
+Without Docker:
+
+```bash
+dotnet run --project src/Wyu2.Relay
+```
+
+See [docs/SELF_HOSTING.md](docs/SELF_HOSTING.md) for every setting, invite-only mode, retention and
+backups, and [docs/PROTOCOL.md](docs/PROTOCOL.md) for the wire format.
 
 ## Repository layout
 
 | Path | What it is |
 | --- | --- |
-| `src/FriendRadar` | The Dalamud plugin (net10.0-windows) |
-| `src/FriendRadar.Core` | Sharing profiles, snapshot filtering and map maths, with no game dependencies |
-| `src/FriendRadar.Protocol` | Wire contracts, share codes and the sealed-box crypto, shared with the relay |
-| `src/FriendRadar.Relay` | The relay service (ASP.NET Core) |
-| `tests/FriendRadar.Tests` | Unit and end-to-end tests |
+| `src/Wyu2` | The Dalamud plugin (net10.0-windows) |
+| `src/Wyu2.Core` | Sharing profiles, snapshot filtering and map maths, with no game dependencies |
+| `src/Wyu2.Protocol` | Wire contracts, share codes and the sealed-box crypto, shared with the relay |
+| `src/Wyu2.Relay` | The relay service (ASP.NET Core) |
+| `tests/Wyu2.Tests` | Unit and end-to-end tests |
+| `repo.json` | Dalamud repository manifest, regenerated by `scripts/make-repo-json.py` |
+| `docker-compose.yml`, `deploy/` | Relay stack, optionally with Caddy for TLS |
 
 ```bash
-dotnet test                                                   # unit and end-to-end tests, no game required
-dotnet build src/FriendRadar/FriendRadar.csproj -c Release    # needs Dalamud reference assemblies
+dotnet test                                     # unit and end-to-end tests, no game required
+dotnet build src/Wyu2/Wyu2.csproj -c Release    # needs Dalamud reference assemblies
 ```
+
+### Cutting a release
+
+Bump `<Version>` in `src/Wyu2/Wyu2.csproj`, then:
+
+```bash
+dotnet build src/Wyu2/Wyu2.csproj -c Release
+python3 scripts/make-repo-json.py --tag v1.2.3.4
+git commit -am "Release v1.2.3.4" && git tag v1.2.3.4 && git push --follow-tags
+```
+
+The release workflow rebuilds, refuses to publish if the tag and `repo.json` disagree with the built
+assembly, and attaches `Wyu2.zip` and `repo.json` to the GitHub release.
 
 ## Limitations
 
@@ -138,6 +180,6 @@ dotnet build src/FriendRadar/FriendRadar.csproj -c Release    # needs Dalamud re
 
 ## Licence
 
-MIT. See [LICENSE](LICENSE).
+MIT, © Kaliya. See [LICENSE](LICENSE).
 
 FINAL FANTASY XIV © SQUARE ENIX CO., LTD. This project is not affiliated with or endorsed by Square Enix.

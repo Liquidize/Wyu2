@@ -1,0 +1,12 @@
+{
+	email {$WYU2_ACME_EMAIL}
+}
+
+{$WYU2_DOMAIN} {
+	encode zstd gzip
+
+	# Wyu2 clients only ever talk to /v1 and /health.
+	reverse_proxy relay:8080 {
+		header_up X-Forwarded-Proto {scheme}
+	}
+}

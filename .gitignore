@@ -28,3 +28,6 @@ relay-data/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local relay environment
+.env

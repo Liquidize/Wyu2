@@ -8,24 +8,54 @@ and is small enough to sit next to anything else you already run.
 ```bash
 git clone https://github.com/Liquidize/Wyu2.git
 cd Wyu2
+cp .env.example .env       # edit at least WYU2_RELAY_NAME and WYU2_RELAY_OPERATOR
 docker compose up -d
 ```
 
-That listens on `127.0.0.1:8080`. Put a TLS-terminating reverse proxy in front of it and point the plugin
-at the public URL. Without Docker:
+That listens on `127.0.0.1:8080`, so nothing is reachable from the internet until you put TLS in front
+of it. Check it came up with `curl http://127.0.0.1:8080/v1/info`.
+
+### With TLS, handled for you
+
+Set `WYU2_DOMAIN` in `.env`, point that name's DNS at the machine, make sure ports 80 and 443 are free,
+then:
 
 ```bash
-dotnet run --project src/FriendRadar.Relay
+docker compose --profile tls up -d
+```
+
+The bundled Caddy (`deploy/Caddyfile`) fetches a Let's Encrypt certificate and proxies
+`https://$WYU2_DOMAIN` to the relay. Set `WYU2_ACME_EMAIL` if you want expiry warnings.
+
+### With your own proxy
+
+Leave the `tls` profile off and point your existing nginx, Caddy or Traefik at `127.0.0.1:8080`. Set
+`WYU2_BIND` if you need a different address, for example `0.0.0.0:8080` when the proxy runs on another
+host behind a firewall.
+
+### Without Docker
+
+```bash
+dotnet run --project src/Wyu2.Relay
+```
+
+### Everyday operations
+
+```bash
+docker compose logs -f relay          # what it is doing
+docker compose pull && docker compose up -d --build    # update after a git pull
+docker compose down                   # stop; the account graph survives in the relay-data volume
 ```
 
 ## Configuration
 
 Everything lives under the `Relay` section of `appsettings.json`, or as environment variables using
-`Relay__Name` style keys.
+`Relay__Name` style keys. The compose file maps the common ones to friendlier `WYU2_*` variables in
+`.env`; anything not listed there can still be set directly, e.g. `Relay__SnapshotIntervalSeconds`.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `Name` | `FriendRadar relay` | Shown in the plugin before anyone registers |
+| `Name` | `Wyu2 relay` | Shown in the plugin before anyone registers |
 | `Operator` | – | Who runs this instance |
 | `Message` | – | Free-form notice shown in the relay screen |
 | `RegistrationOpen` | `true` | When false, only holders of an invite code may register |
@@ -40,14 +70,22 @@ Everything lives under the `Relay` section of `appsettings.json`, or as environm
 | `RequestsPerMinute` | `240` | Rate limit per token, or per IP before authentication |
 | `MaxAccounts` | `0` | Cap on accounts; 0 means unlimited |
 
-Invite-only, via compose:
+Invite-only, via `.env`:
+
+```bash
+WYU2_REGISTRATION_OPEN=false
+WYU2_INVITE_CODE=some-code-you-hand-out
+```
+
+For several codes, add them to the `relay` service in `docker-compose.yml` directly:
 
 ```yaml
 environment:
-  Relay__RegistrationOpen: "false"
   Relay__InviteCodes__0: "first-code"
   Relay__InviteCodes__1: "second-code"
 ```
+
+Blank codes are ignored, so an unset variable cannot accidentally open a closed relay.
 
 ## Reverse proxy
 

@@ -1,0 +1,22 @@
+{
+  "Name": "Wyu2",
+  "InternalName": "Wyu2",
+  "Author": "Kaliya",
+  "Punchline": "What you up to? See where opted-in friends are and what they are doing.",
+  "Description": "Wyu2 - \"what you up to?\" - shows friends who opted in on a radar, on the zone map, and in a live activity list: which zone and public instance they are in, which duty they are running, which job they are playing, and whether they are fighting, gathering, crafting, queueing or just idling in Limsa.\n\nNobody appears until they opt in. You swap share codes, both sides accept, and even then nothing leaves your machine until you turn sharing on and tick the fields you want to send. Each update is encrypted separately for each recipient, so a relay only ever moves blobs it cannot read. Point it at your own relay - one ships with the source - and delete your account whenever you like.\n\nCommands: /wyu2 for the friend list, /wyu2 radar, /wyu2 map, /wyu2 config, /wyu2 share on|off, /wyu2 pause [minutes], /wyu2 note <text>.",
+  "RepoUrl": "https://github.com/Liquidize/Wyu2",
+  "Tags": [
+    "friends",
+    "radar",
+    "map",
+    "social",
+    "presence",
+    "location"
+  ],
+  "CategoryTags": [
+    "utility"
+  ],
+  "AcceptsFeedback": true,
+  "ApplicableVersion": "any",
+  "LoadPriority": 0
+}

@@ -1,6 +1,6 @@
 # Privacy model
 
-FriendRadar exists to share your location with people you chose. Everything below is about making that
+Wyu2 exists to share your location with people you chose. Everything below is about making that
 choice explicit, reversible, and narrow.
 
 ## The three gates
@@ -53,7 +53,7 @@ distinguish "not shared" from "not known".
 | Hide coordinates in housing | on | |
 | Blocked zones | empty | Nothing at all is published in a blocked zone |
 
-Plus a manual **Pause** button (15 minutes by default, or `/friendradar pause 60`), and a **Stop
+Plus a manual **Pause** button (15 minutes by default, or `/wyu2 pause 60`), and a **Stop
 sharing** switch that also asks the relay to drop anything it is still holding for you.
 
 ## Encryption
@@ -64,7 +64,7 @@ machine; the public half is published so contacts can encrypt to you.
 For every recipient, on every publish:
 
 1. Derive a shared secret with ECDH against that contact's public key.
-2. Run it through HKDF-SHA256 with `FriendRadar/v1/presence|<sender>|<recipient>` as the info string, so
+2. Run it through HKDF-SHA256 with `Wyu2/v1/presence|<sender>|<recipient>` as the info string, so
    each direction of each pair gets its own key.
 3. Encrypt the payload with AES-256-GCM under a fresh random nonce, with
    `<version>|<sender>|<recipient>` as associated data.
@@ -102,6 +102,6 @@ think it leaked.
 
 ## Tracking people who did not opt in
 
-There is one setting, off by default, that plots in-game friends who never installed FriendRadar, using
+There is one setting, off by default, that plots in-game friends who never installed Wyu2, using
 only what your own client already renders on screen. It shares nothing about them with anyone else, but
 those people never agreed to be plotted. Leave it off unless everyone involved knows.

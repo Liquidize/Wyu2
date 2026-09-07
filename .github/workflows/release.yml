@@ -1,0 +1,106 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release, e.g. v1.0.0.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Resolve tag
+        id: tag
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Test
+        run: dotnet test tests/Wyu2.Tests/Wyu2.Tests.csproj -c Release
+
+      - name: Fetch Dalamud
+        run: |
+          mkdir -p "$HOME/dalamud"
+          curl -fsSL https://goatcorp.github.io/dalamud-distrib/latest.zip -o /tmp/dalamud.zip
+          unzip -q /tmp/dalamud.zip -d "$HOME/dalamud"
+
+      - name: Build plugin
+        run: dotnet build src/Wyu2/Wyu2.csproj -c Release -p:DalamudLibPath="$HOME/dalamud/"
+
+      - name: Check the tag matches the built assembly
+        run: |
+          BUILT=$(python3 -c "import json;print(json.load(open('src/Wyu2/bin/Release/Wyu2/Wyu2.json'))['AssemblyVersion'])")
+          if [ "$BUILT" != "${{ steps.tag.outputs.version }}" ]; then
+            echo "Tag ${{ steps.tag.outputs.tag }} does not match assembly version $BUILT." >&2
+            echo "Update <Version> in src/Wyu2/Wyu2.csproj, or tag v$BUILT." >&2
+            exit 1
+          fi
+
+      - name: Package
+        run: cp src/Wyu2/bin/Release/Wyu2/latest.zip Wyu2.zip
+
+      - name: Check repo.json points at this release
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+
+          tag = os.environ["TAG"]
+          version = os.environ["VERSION"]
+          expected = f"https://github.com/${{ github.repository }}/releases/download/{tag}/Wyu2.zip"
+
+          entry = json.load(open("repo.json"))[0]
+          problems = []
+          if entry["AssemblyVersion"] != version:
+              problems.append(f"AssemblyVersion is {entry['AssemblyVersion']}, expected {version}")
+          for key in ("DownloadLinkInstall", "DownloadLinkUpdate", "DownloadLinkTesting"):
+              if entry[key] != expected:
+                  problems.append(f"{key} is {entry[key]}, expected {expected}")
+
+          if problems:
+              print("repo.json is stale:", *problems, sep="\n  ", file=sys.stderr)
+              print(f"\nRegenerate it with: python3 scripts/make-repo-json.py --tag {tag}", file=sys.stderr)
+              sys.exit(1)
+
+          print("repo.json matches", tag)
+          PY
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          VERSION: ${{ steps.tag.outputs.version }}
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          NOTES=$(cat <<'NOTE'
+          Add this as a Dalamud custom plugin repository:
+
+              https://github.com/Liquidize/Wyu2/releases/latest/download/repo.json
+
+          `/xlsettings` -> Experimental -> Custom Plugin Repositories -> paste the URL -> Save,
+          then install **Wyu2** from `/xlplugins`. That URL always resolves to the newest release,
+          so it never needs changing.
+
+          Wyu2 only shows friends who opted in, and only sends the fields you ticked.
+          NOTE
+          )
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" Wyu2.zip repo.json --clobber
+          else
+            gh release create "$TAG" Wyu2.zip repo.json --title "Wyu2 $TAG" --notes "$NOTES"
+          fi
