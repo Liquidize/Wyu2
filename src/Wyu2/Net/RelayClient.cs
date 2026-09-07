@@ -160,6 +160,10 @@ public sealed class RelayClient : IDisposable
     public Task<bool> RemoveContactAsync(string accountId, CancellationToken token = default)
         => SendVoidAsync(HttpMethod.Delete, $"v1/contacts/{accountId}", null, token);
 
+    /// <summary>Publishes the current epoch key so contacts can encrypt to it.</summary>
+    public Task<bool> PublishPrekeyAsync(PrekeyBundle bundle, CancellationToken token = default)
+        => SendVoidAsync(HttpMethod.Post, "v1/me/prekey", new PublishPrekeyRequest { Bundle = bundle }, token);
+
     public Task<List<GroupDto>?> GetGroupsAsync(CancellationToken token = default)
         => SendAsync<List<GroupDto>>(HttpMethod.Get, "v1/groups", null, requireAuth: true, token);
 

@@ -36,6 +36,9 @@ public sealed record SelfSnapshot
     public string? Note { get; init; }
     public long TakenAtUnixMs { get; init; }
 
+    /// <summary>Publish counter, carried into the payload so recipients can spot a replay.</summary>
+    public long Sequence { get; init; }
+
     /// <summary>Set when a privacy rule says the position must not go out, whatever the profile says.</summary>
     public bool PositionSuppressed { get; init; }
 
@@ -51,6 +54,7 @@ public sealed record SelfSnapshot
         {
             Version = ProtocolConstants.Version,
             SentAtUnixMs = TakenAtUnixMs,
+            Sequence = Sequence,
             CharacterName = profile.ShareCharacterName ? CharacterName : FallbackName,
             HomeWorldId = profile.ShareWorld ? HomeWorldId : 0,
             CurrentWorldId = profile.ShareWorld ? CurrentWorldId : 0,

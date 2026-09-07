@@ -22,6 +22,18 @@ public sealed class PresenceHub : IDisposable
 
     private readonly Dictionary<string, TrackedFriend> friends = new(StringComparer.Ordinal);
     private readonly ConcurrentQueue<(string AccountId, string DisplayName, PresencePayload Payload)> inbox = new();
+    private readonly ReplayGuard replays = new();
+
+    /// <summary>
+    /// How many publish counters are claimed at a time. The counter has to survive a restart without
+    /// going backwards, but writing the configuration file on every publish would mean a disk write
+    /// every few seconds. Instead a block is reserved up front and only the watermark is stored, so a
+    /// restart resumes above anything actually sent.
+    /// </summary>
+    private const long SequenceBlock = 1_000;
+
+    private long sequence;
+    private long reservedSequence;
     private readonly CancellationTokenSource cancellation = new();
 
     private DateTime lastPublish = DateTime.MinValue;
@@ -46,6 +58,23 @@ public sealed class PresenceHub : IDisposable
         this.snapshots = snapshots;
         this.scanner = scanner;
         this.data = data;
+
+        sequence = config.PresenceSequence;
+        reservedSequence = config.PresenceSequence;
+    }
+
+    private long NextSequence()
+    {
+        sequence++;
+
+        if (sequence > reservedSequence)
+        {
+            reservedSequence = sequence + SequenceBlock;
+            config.PresenceSequence = reservedSequence;
+            config.Save();
+        }
+
+        return sequence;
     }
 
     /// <summary>Friends with any data at all, ordered for display.</summary>
@@ -80,7 +109,7 @@ public sealed class PresenceHub : IDisposable
         if (IsIdle(contactTask) && now - lastContactSync > TimeSpan.FromSeconds(60))
         {
             lastContactSync = now;
-            contactTask = Task.Run(() => session.RefreshContactsAsync(cancellation.Token), cancellation.Token);
+            contactTask = Task.Run(SyncAccountAsync, cancellation.Token);
         }
 
         if (IsIdle(publishTask) && now - lastPublish > TimeSpan.FromSeconds(Math.Max(3, config.PublishIntervalSeconds)))
@@ -109,7 +138,18 @@ public sealed class PresenceHub : IDisposable
     {
         lastContactSync = DateTime.UtcNow;
         if (IsIdle(contactTask))
-            contactTask = Task.Run(() => session.RefreshContactsAsync(cancellation.Token), cancellation.Token);
+            contactTask = Task.Run(SyncAccountAsync, cancellation.Token);
+    }
+
+    /// <summary>
+    /// Pulls the contact list and keeps the epoch keys current. Rotation rides on the contact sync
+    /// because both need the relay and neither is urgent, and a failure on either is simply retried on
+    /// the next pass.
+    /// </summary>
+    private async Task SyncAccountAsync()
+    {
+        await session.EnsureForwardSecrecyAsync(cancellation.Token).ConfigureAwait(false);
+        await session.RefreshContactsAsync(cancellation.Token).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -137,8 +177,12 @@ public sealed class PresenceHub : IDisposable
 
         var recipients = config.SnapshotContacts()
             .Where(c => config.CanShareWith(c) && !string.IsNullOrEmpty(c.PublicKey))
-            .Select(c => (c.AccountId, c.PublicKey, Profile: config.ProfileFor(c)))
+            .Select(c => (Contact: c, Profile: config.ProfileFor(c)))
             .ToList();
+
+        // One counter per snapshot rather than per recipient, so every copy of the same moment carries
+        // the same number and a recipient sees a single clean progression.
+        var sequence = NextSequence();
 
         PublishedRecipients = recipients.Count;
         if (recipients.Count == 0)
@@ -147,19 +191,27 @@ public sealed class PresenceHub : IDisposable
         publishTask = Task.Run(async () =>
         {
             var envelopes = new List<PresenceEnvelope>(recipients.Count);
-            foreach (var (accountId, publicKey, profile) in recipients)
+            foreach (var (contact, profile) in recipients)
             {
-                var key = session.GetOutboundKey(accountId, publicKey);
-                if (key is null)
+                var sealing = session.GetOutboundKey(contact, ProtocolConstants.KeyDerivationInfo);
+                if (sealing is not { } seal)
                     continue;
 
                 try
                 {
-                    envelopes.Add(PresenceCrypto.Seal(key, snapshot.ToPayload(profile), config.AccountId, accountId));
+                    var payload = snapshot.ToPayload(profile) with { Sequence = sequence };
+                    var envelope = PresenceCrypto.Seal(
+                        seal.Key, payload, config.AccountId, contact.AccountId);
+
+                    envelopes.Add(envelope with
+                    {
+                        SenderEpoch = seal.SenderEpoch,
+                        RecipientEpoch = seal.RecipientEpoch,
+                    });
                 }
                 catch (Exception ex)
                 {
-                    Service.Log.Warning(ex, "Could not encrypt presence for {Contact}", accountId);
+                    Service.Log.Warning(ex, "Could not encrypt presence for {Contact}", contact.AccountId);
                 }
             }
 
@@ -191,7 +243,9 @@ public sealed class PresenceHub : IDisposable
             if (contact is null || !config.CanSee(contact) || string.IsNullOrEmpty(contact.PublicKey))
                 continue;
 
-            var key = session.GetInboundKey(entry.SenderAccountId, contact.PublicKey);
+            var key = session.GetInboundKey(
+                contact, entry.SenderEpoch, entry.RecipientEpoch, ProtocolConstants.KeyDerivationInfo);
+
             if (key is null)
                 continue;
 
@@ -201,6 +255,21 @@ public sealed class PresenceHub : IDisposable
             if (payload is null)
             {
                 Service.Log.Debug("Dropped an unreadable presence blob from {Contact}", entry.SenderAccountId);
+                continue;
+            }
+
+            // The counter and the timestamp both sit inside the sealed payload, so a relay re-serving an
+            // old blob cannot dress it up as a new one.
+            var verdict = replays.Inspect(
+                entry.SenderAccountId,
+                payload.Sequence,
+                payload.SentAtUnixMs,
+                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+
+            if (!ReplayGuard.IsAccepted(verdict))
+            {
+                Service.Log.Warning(
+                    "Discarded presence from {Contact}: {Verdict}", entry.SenderAccountId, verdict);
                 continue;
             }
 

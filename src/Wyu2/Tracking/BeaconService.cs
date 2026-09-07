@@ -124,7 +124,6 @@ public sealed class BeaconService : IDisposable
 
         var recipients = config.SnapshotContacts()
             .Where(c => config.CanShareWith(c) && !string.IsNullOrEmpty(c.PublicKey))
-            .Select(c => (c.AccountId, c.PublicKey))
             .ToList();
 
         if (recipients.Count == 0)
@@ -190,25 +189,28 @@ public sealed class BeaconService : IDisposable
         string beaconId,
         BeaconPayload payload,
         int ttlSeconds,
-        List<(string AccountId, string PublicKey)> recipients)
+        List<Configuration.ContactSettings> recipients)
     {
         _ = Task.Run(async () =>
         {
             var envelopes = new List<BeaconEnvelope>(recipients.Count);
-            foreach (var (accountId, publicKey) in recipients)
+            foreach (var contact in recipients)
             {
-                var key = session.GetOutboundBeaconKey(accountId, publicKey);
-                if (key is null)
+                var accountId = contact.AccountId;
+                var sealing = session.GetOutboundKey(contact, ProtocolConstants.BeaconKeyDerivationInfo);
+                if (sealing is not { } seal)
                     continue;
 
                 try
                 {
-                    var envelope = PresenceCrypto.Seal(key, payload, config.AccountId, accountId);
+                    var envelope = PresenceCrypto.Seal(seal.Key, payload, config.AccountId, accountId);
                     envelopes.Add(new BeaconEnvelope
                     {
                         RecipientAccountId = envelope.RecipientAccountId,
                         Nonce = envelope.Nonce,
                         Ciphertext = envelope.Ciphertext,
+                        SenderEpoch = seal.SenderEpoch,
+                        RecipientEpoch = seal.RecipientEpoch,
                     });
                 }
                 catch (Exception ex)
@@ -244,7 +246,9 @@ public sealed class BeaconService : IDisposable
             if (contact is null || !config.CanSee(contact) || string.IsNullOrEmpty(contact.PublicKey))
                 continue;
 
-            var key = session.GetInboundBeaconKey(entry.SenderAccountId, contact.PublicKey);
+            var key = session.GetInboundKey(
+                contact, entry.SenderEpoch, entry.RecipientEpoch, ProtocolConstants.BeaconKeyDerivationInfo);
+
             if (key is null)
                 continue;
 

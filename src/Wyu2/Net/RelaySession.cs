@@ -12,11 +12,10 @@ public sealed class RelaySession : IDisposable
 {
     private readonly Configuration.Configuration config;
     private readonly RelayClient client;
-    private readonly ConcurrentDictionary<string, byte[]> outboundKeys = new(StringComparer.Ordinal);
-    private readonly ConcurrentDictionary<string, byte[]> inboundKeys = new(StringComparer.Ordinal);
-    private readonly ConcurrentDictionary<string, byte[]> outboundBeaconKeys = new(StringComparer.Ordinal);
-    private readonly ConcurrentDictionary<string, byte[]> inboundBeaconKeys = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, byte[]> derived = new(StringComparer.Ordinal);
     private AccountKeyPair? keys;
+    private SigningKeyPair? signing;
+    private EpochKeyRing? epochs;
 
     public RelaySession(Configuration.Configuration config, RelayClient client)
     {
@@ -42,11 +41,28 @@ public sealed class RelaySession : IDisposable
     public void ReloadKeys()
     {
         keys?.Dispose();
+        signing?.Dispose();
+        epochs?.Dispose();
         keys = null;
-        outboundKeys.Clear();
-        inboundKeys.Clear();
-        outboundBeaconKeys.Clear();
-        inboundBeaconKeys.Clear();
+        signing = null;
+        epochs = null;
+        derived.Clear();
+
+        if (!string.IsNullOrEmpty(config.SigningPrivateKey))
+        {
+            try
+            {
+                signing = SigningKeyPair.Import(config.SigningPrivateKey);
+            }
+            catch (Exception ex)
+            {
+                Service.Log.Error(ex, "Stored Wyu2 signing key could not be loaded; a new one will be issued.");
+                config.SigningPrivateKey = string.Empty;
+            }
+        }
+
+        epochs = EpochKeyRing.Import(config.EpochKeys.Select(
+            k => new EpochKeyRecord(k.Epoch, k.PrivateKey, k.CreatedAtUnixMs, k.ExpiresAtUnixMs)));
 
         if (string.IsNullOrEmpty(config.PrivateKey))
             return;
@@ -74,10 +90,12 @@ public sealed class RelaySession : IDisposable
             return "Pick a display name first.";
 
         using var fresh = AccountKeyPair.Create();
+        using var freshSigning = SigningKeyPair.Create();
         var response = await client.RegisterAsync(new RegisterRequest
         {
             DisplayName = displayName.Trim(),
             PublicKey = fresh.ExportPublicKeyBase64(),
+            SigningPublicKey = freshSigning.ExportPublicKeyBase64(),
             ClientVersion = Plugin.Version,
             InviteCode = string.IsNullOrWhiteSpace(inviteCode) ? null : inviteCode.Trim(),
         }, token).ConfigureAwait(false);
@@ -89,11 +107,15 @@ public sealed class RelaySession : IDisposable
         config.AccessToken = response.AccessToken;
         config.ShareCode = response.ShareCode;
         config.PrivateKey = fresh.ExportPrivateKeyBase64();
+        config.SigningPrivateKey = freshSigning.ExportPrivateKeyBase64();
+        config.EpochKeys = [];
+        config.PublishedEpoch = 0;
         config.DisplayName = displayName.Trim();
         config.Save();
 
         client.Invalidate();
         ReloadKeys();
+        await EnsureForwardSecrecyAsync(token).ConfigureAwait(false);
         await RefreshContactsAsync(token).ConfigureAwait(false);
         return null;
     }
@@ -112,6 +134,10 @@ public sealed class RelaySession : IDisposable
         config.AccountId = string.Empty;
         config.AccessToken = string.Empty;
         config.PrivateKey = string.Empty;
+        config.SigningPrivateKey = string.Empty;
+        config.EpochKeys = [];
+        config.PublishedEpoch = 0;
+        config.PresenceSequence = 0;
         config.ShareCode = string.Empty;
         config.EditContacts(contacts =>
         {
@@ -162,11 +188,13 @@ public sealed class RelaySession : IDisposable
     private bool MergeIntoConfiguration(List<ContactDto> contacts, List<GroupDto> groups)
     {
         // Everybody the relay says we can see, and why.
-        var reachable = new Dictionary<string, (string DisplayName, string PublicKey, bool Direct, List<string> Groups)>(
-            StringComparer.Ordinal);
+        var reachable = new Dictionary<string, Reachable>(StringComparer.Ordinal);
 
         foreach (var contact in contacts)
-            reachable[contact.AccountId] = (contact.DisplayName, contact.PublicKey, true, []);
+        {
+            reachable[contact.AccountId] = new Reachable(
+                contact.DisplayName, contact.PublicKey, contact.SigningPublicKey, contact.Prekey, true, []);
+        }
 
         foreach (var group in groups)
         {
@@ -178,11 +206,12 @@ public sealed class RelaySession : IDisposable
                 if (reachable.TryGetValue(member.AccountId, out var existing))
                 {
                     existing.Groups.Add(group.GroupId);
-                    reachable[member.AccountId] = existing;
                 }
                 else
                 {
-                    reachable[member.AccountId] = (member.DisplayName, member.PublicKey, false, [group.GroupId]);
+                    reachable[member.AccountId] = new Reachable(
+                        member.DisplayName, member.PublicKey, member.SigningPublicKey, member.Prekey,
+                        false, [group.GroupId]);
                 }
             }
         }
@@ -198,14 +227,18 @@ public sealed class RelaySession : IDisposable
 
                 if (settings is null)
                 {
-                    list.Add(new Configuration.ContactSettings
+                    settings = new Configuration.ContactSettings
                     {
                         AccountId = accountId,
                         DisplayName = info.DisplayName,
                         PublicKey = info.PublicKey,
+                        SigningPublicKey = info.SigningPublicKey,
                         IsDirectContact = info.Direct,
                         GroupIds = info.Groups,
-                    });
+                    };
+
+                    AdoptPrekey(settings, info);
+                    list.Add(settings);
                     dirty = true;
                     continue;
                 }
@@ -235,6 +268,16 @@ public sealed class RelaySession : IDisposable
                     settings.GroupIds = info.Groups;
                     dirty = true;
                 }
+
+                if (settings.SigningPublicKey != info.SigningPublicKey &&
+                    !string.IsNullOrEmpty(info.SigningPublicKey))
+                {
+                    settings.SigningPublicKey = info.SigningPublicKey;
+                    dirty = true;
+                }
+
+                if (AdoptPrekey(settings, info))
+                    dirty = true;
             }
 
             // Anybody the relay no longer lists has unlinked or left every shared group.
@@ -243,6 +286,48 @@ public sealed class RelaySession : IDisposable
 
             return dirty;
         }) | MergeGroupSettings(groups);
+    }
+
+    /// <summary>Everything the relay says about somebody we can see, and why we can see them.</summary>
+    private readonly record struct Reachable(
+        string DisplayName,
+        string PublicKey,
+        string SigningPublicKey,
+        PrekeyBundle? Prekey,
+        bool Direct,
+        List<string> Groups);
+
+    /// <summary>
+    /// Takes a contact's newly published epoch key, but only after checking it was signed by the identity
+    /// key we already hold for them. The relay is the one handing this over, and an unchecked bundle
+    /// would let it substitute a key of its own and read everything addressed to them.
+    ///
+    /// The outgoing epoch is kept alongside the new one: a payload sealed moments before they rotated
+    /// arrives after we have already seen the replacement, and without the predecessor it could not be
+    /// opened.
+    /// </summary>
+    private static bool AdoptPrekey(Configuration.ContactSettings settings, Reachable info)
+    {
+        if (info.Prekey is not { } bundle || !bundle.IsPresent)
+            return false;
+
+        if (bundle.Epoch <= settings.PrekeyEpoch)
+            return false;
+
+        if (!bundle.Verify(settings.AccountId, info.SigningPublicKey))
+        {
+            Service.Log.Warning(
+                "Ignoring an epoch key for {Contact} that is not signed by their identity key.",
+                settings.AccountId);
+            return false;
+        }
+
+        settings.PreviousPrekeyEpoch = settings.PrekeyEpoch;
+        settings.PreviousPrekeyPublicKey = settings.PrekeyPublicKey;
+        settings.PrekeyEpoch = bundle.Epoch;
+        settings.PrekeyPublicKey = bundle.EpochPublicKey;
+        settings.SupportsForwardSecrecy = true;
+        return true;
     }
 
     /// <summary>Keeps the local group settings in step with the relay's list.</summary>
@@ -276,50 +361,219 @@ public sealed class RelaySession : IDisposable
         return dirty;
     }
 
-    /// <summary>Key used to encrypt presence we send to a contact.</summary>
-    public byte[]? GetOutboundKey(string contactAccountId, string contactPublicKey)
-        => GetKey(outboundKeys, contactAccountId, contactPublicKey, config.AccountId, contactAccountId,
-            ProtocolConstants.KeyDerivationInfo);
-
-    /// <summary>Key used to decrypt presence a contact sent us.</summary>
-    public byte[]? GetInboundKey(string contactAccountId, string contactPublicKey)
-        => GetKey(inboundKeys, contactAccountId, contactPublicKey, contactAccountId, config.AccountId,
-            ProtocolConstants.KeyDerivationInfo);
+    // ---------------------------------------------------------------- key material
 
     /// <summary>
-    /// Key used to encrypt beacons we send to a contact. Beacons derive from the same shared secret as
-    /// presence but under their own purpose, so neither kind of message can be passed off as the other.
+    /// Ensures this account has a signing key and a current epoch key, upgrading an account created
+    /// before forward secrecy in place rather than making the user abandon it. Called from the periodic
+    /// contact sync, so a failed publish is simply retried a minute later.
     /// </summary>
-    public byte[]? GetOutboundBeaconKey(string contactAccountId, string contactPublicKey)
-        => GetKey(outboundBeaconKeys, contactAccountId, contactPublicKey, config.AccountId, contactAccountId,
-            ProtocolConstants.BeaconKeyDerivationInfo);
-
-    /// <summary>Key used to decrypt beacons a contact dropped for us.</summary>
-    public byte[]? GetInboundBeaconKey(string contactAccountId, string contactPublicKey)
-        => GetKey(inboundBeaconKeys, contactAccountId, contactPublicKey, contactAccountId, config.AccountId,
-            ProtocolConstants.BeaconKeyDerivationInfo);
-
-    private byte[]? GetKey(
-        ConcurrentDictionary<string, byte[]> cache,
-        string contactAccountId,
-        string contactPublicKey,
-        string senderId,
-        string recipientId,
-        string purpose)
+    public async Task EnsureForwardSecrecyAsync(CancellationToken token = default)
     {
-        if (keys is null || string.IsNullOrEmpty(contactPublicKey) || string.IsNullOrEmpty(config.AccountId))
+        if (!HasAccount)
+            return;
+
+        var changed = false;
+
+        if (signing is null)
+        {
+            var created = SigningKeyPair.Create();
+            var updated = await client.UpdateAccountAsync(
+                new UpdateAccountRequest { SigningPublicKey = created.ExportPublicKeyBase64() }, token)
+                .ConfigureAwait(false);
+
+            if (updated is null)
+            {
+                created.Dispose();
+                return;
+            }
+
+            signing = created;
+            config.SigningPrivateKey = created.ExportPrivateKeyBase64();
+            changed = true;
+        }
+
+        epochs ??= new EpochKeyRing();
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        if (epochs.NeedsRotation(now))
+        {
+            epochs.Rotate(signing, config.AccountId, now, ProtocolConstants.EpochLifetimeMs);
+            StoreEpochs();
+            derived.Clear();
+            changed = true;
+        }
+
+        // Seal under the newest epoch the relay has actually taken. Rotating locally is cheap, but a key
+        // contacts have never been offered is a key they cannot decrypt with, so the two are tracked
+        // separately and publishing is retried until it lands.
+        if (config.PublishedEpoch != epochs.CurrentEpoch && BundleFor(epochs.CurrentEpoch) is { } bundle)
+        {
+            if (await client.PublishPrekeyAsync(bundle, token).ConfigureAwait(false))
+            {
+                config.PublishedEpoch = bundle.Epoch;
+                changed = true;
+            }
+        }
+
+        if (changed)
+            config.Save();
+    }
+
+    /// <summary>
+    /// Rebuilds the published bundle for an epoch we still hold. Signatures are randomised, so a fresh
+    /// one over the same canonical bytes is just as valid as the original; there is nothing to keep.
+    /// </summary>
+    private PrekeyBundle? BundleFor(int epoch)
+    {
+        if (signing is null || epochs is null || epoch <= 0 || !epochs.TryGet(epoch, out var key))
             return null;
 
-        // The cache key includes the public key so a rotation cannot be served from a stale entry.
-        var cacheKey = contactAccountId + "|" + contactPublicKey;
-        if (cache.TryGetValue(cacheKey, out var cached))
+        var record = epochs.Export().FirstOrDefault(r => r.Epoch == epoch);
+        return record is null
+            ? null
+            : PrekeyBundle.Create(signing, config.AccountId, epoch, key, record.CreatedAtUnixMs, record.ExpiresAtUnixMs);
+    }
+
+    private void StoreEpochs()
+    {
+        config.EpochKeys = epochs is null
+            ? []
+            : epochs.Export()
+                .Select(r => new Configuration.StoredEpochKey
+                {
+                    Epoch = r.Epoch,
+                    PrivateKey = r.PrivateKeyBase64,
+                    CreatedAtUnixMs = r.CreatedAtUnixMs,
+                    ExpiresAtUnixMs = r.ExpiresAtUnixMs,
+                })
+                .ToList();
+    }
+
+    /// <summary>A key to seal with, and the epochs it was derived under so the envelope can say so.</summary>
+    public readonly record struct SealingKey(byte[] Key, int SenderEpoch, int RecipientEpoch);
+
+    /// <summary>
+    /// The key for something we are sending to a contact. Prefers the rotating epoch keys and refuses to
+    /// fall back for anybody who has ever published one: otherwise a relay that simply stopped serving
+    /// bundles could push an established pair back onto long-term keys and quietly take forward secrecy
+    /// away from both of them.
+    /// </summary>
+    public SealingKey? GetOutboundKey(Configuration.ContactSettings contact, string purpose)
+    {
+        if (keys is null || string.IsNullOrEmpty(config.AccountId))
+            return null;
+
+        var myEpoch = config.PublishedEpoch;
+        if (myEpoch > 0 && contact.PrekeyEpoch > 0 && contact.PrekeyPublicKey.Length > 0 &&
+            epochs is not null && epochs.TryGet(myEpoch, out var mine))
+        {
+            var key = Derive(
+                mine, contact.PrekeyPublicKey, config.AccountId, contact.AccountId,
+                myEpoch, contact.PrekeyEpoch, purpose, contact.AccountId);
+
+            return key is null ? null : new SealingKey(key, myEpoch, contact.PrekeyEpoch);
+        }
+
+        if (contact.SupportsForwardSecrecy)
+        {
+            Service.Log.Warning(
+                "Not sealing to {Contact} with long-term keys: they have published an epoch key before, " +
+                "so falling back would be a downgrade.", contact.AccountId);
+            return null;
+        }
+
+        var legacy = DeriveLegacy(contact.PublicKey, config.AccountId, contact.AccountId, purpose, contact.AccountId);
+        return legacy is null ? null : new SealingKey(legacy, 0, 0);
+    }
+
+    /// <summary>
+    /// The key for something a contact sent us. A miss because our epoch key is gone is the intended
+    /// outcome for anything old, not a failure: it is forward secrecy working.
+    /// </summary>
+    public byte[]? GetInboundKey(
+        Configuration.ContactSettings contact,
+        int senderEpoch,
+        int recipientEpoch,
+        string purpose)
+    {
+        if (keys is null || string.IsNullOrEmpty(config.AccountId))
+            return null;
+
+        if (senderEpoch > 0 && recipientEpoch > 0)
+        {
+            if (epochs is null || !epochs.TryGet(recipientEpoch, out var mine))
+                return null;
+
+            var theirs = contact.PrekeyEpoch == senderEpoch
+                ? contact.PrekeyPublicKey
+                : contact.PreviousPrekeyEpoch == senderEpoch
+                    ? contact.PreviousPrekeyPublicKey
+                    : null;
+
+            if (string.IsNullOrEmpty(theirs))
+                return null;
+
+            return Derive(
+                mine, theirs, contact.AccountId, config.AccountId,
+                senderEpoch, recipientEpoch, purpose, contact.AccountId);
+        }
+
+        if (contact.SupportsForwardSecrecy)
+            return null;
+
+        return DeriveLegacy(contact.PublicKey, contact.AccountId, config.AccountId, purpose, contact.AccountId);
+    }
+
+    private byte[]? Derive(
+        AccountKeyPair mine,
+        string theirEpochPublicKey,
+        string senderId,
+        string recipientId,
+        int senderEpoch,
+        int recipientEpoch,
+        string purpose,
+        string contactAccountId)
+    {
+        var cacheKey = $"{purpose}|{senderId}|{recipientId}|{senderEpoch}|{recipientEpoch}|{theirEpochPublicKey}";
+        if (derived.TryGetValue(cacheKey, out var cached))
             return cached;
 
         try
         {
-            var derived = PresenceCrypto.DeriveKey(keys, contactPublicKey, senderId, recipientId, purpose);
-            cache[cacheKey] = derived;
-            return derived;
+            var key = PresenceCrypto.DeriveEpochKey(
+                mine, theirEpochPublicKey, senderId, recipientId, senderEpoch, recipientEpoch, purpose);
+
+            derived[cacheKey] = key;
+            return key;
+        }
+        catch (Exception ex)
+        {
+            Service.Log.Warning(ex, "Could not derive an epoch key for contact {Contact}", contactAccountId);
+            return null;
+        }
+    }
+
+    private byte[]? DeriveLegacy(
+        string contactPublicKey,
+        string senderId,
+        string recipientId,
+        string purpose,
+        string contactAccountId)
+    {
+        if (keys is null || string.IsNullOrEmpty(contactPublicKey))
+            return null;
+
+        // The cache key includes the public key so a rotation cannot be served from a stale entry.
+        var cacheKey = $"legacy|{purpose}|{senderId}|{recipientId}|{contactPublicKey}";
+        if (derived.TryGetValue(cacheKey, out var cached))
+            return cached;
+
+        try
+        {
+            var key = PresenceCrypto.DeriveKey(keys, contactPublicKey, senderId, recipientId, purpose);
+            derived[cacheKey] = key;
+            return key;
         }
         catch (Exception ex)
         {
@@ -328,5 +582,10 @@ public sealed class RelaySession : IDisposable
         }
     }
 
-    public void Dispose() => keys?.Dispose();
+    public void Dispose()
+    {
+        keys?.Dispose();
+        signing?.Dispose();
+        epochs?.Dispose();
+    }
 }

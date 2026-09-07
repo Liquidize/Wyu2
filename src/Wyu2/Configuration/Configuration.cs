@@ -39,6 +39,29 @@ public sealed class ContactSettings
     /// <summary>Groups you share with this person, if any.</summary>
     public List<string> GroupIds { get; set; } = [];
 
+    /// <summary>Their long-term signing key, used to check that a prekey really came from them.</summary>
+    public string SigningPublicKey { get; set; } = string.Empty;
+
+    /// <summary>Their current epoch key, once we have verified the bundle that carried it.</summary>
+    public int PrekeyEpoch { get; set; }
+
+    public string PrekeyPublicKey { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The epoch before it. Kept because a payload sealed just before they rotated arrives after we have
+    /// already seen the new bundle, and without this it could not be opened.
+    /// </summary>
+    public int PreviousPrekeyEpoch { get; set; }
+
+    public string PreviousPrekeyPublicKey { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Set once this contact has ever published a valid prekey, and never cleared. A relay that later
+    /// withholds their bundle would otherwise silently push the pair back onto long-term keys and take
+    /// forward secrecy away without either of them noticing.
+    /// </summary>
+    public bool SupportsForwardSecrecy { get; set; }
+
     /// <summary>Colour used for their radar blip.</summary>
     public Vector4 Color { get; set; } = new(0.35f, 0.78f, 1.00f, 1f);
 
@@ -61,6 +84,19 @@ public sealed class ContactSettings
     public ushort LastSeenTerritoryId { get; set; }
 
     public string? LastSeenActivity { get; set; }
+}
+
+/// <summary>One of our own epoch keys as written to the configuration file.</summary>
+public sealed class StoredEpochKey
+{
+    public int Epoch { get; set; }
+
+    /// <summary>PKCS#8 private key, base64. Deleted when the epoch ages out.</summary>
+    public string PrivateKey { get; set; } = string.Empty;
+
+    public long CreatedAtUnixMs { get; set; }
+
+    public long ExpiresAtUnixMs { get; set; }
 }
 
 /// <summary>Local settings for one group. The group itself lives on the relay.</summary>
@@ -167,6 +203,30 @@ public sealed class Configuration : IPluginConfiguration
     public string AccessToken { get; set; } = string.Empty;
 
     public string PrivateKey { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The long-term key we sign epoch keys with. Like <see cref="PrivateKey"/> this sits in plain JSON;
+    /// anybody who can read the file can impersonate this account on its relay.
+    /// </summary>
+    public string SigningPrivateKey { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Our own epoch private keys, newest first. Only the ones still inside the retention window are
+    /// written, so pruning survives a restart and a destroyed epoch cannot be resurrected.
+    /// </summary>
+    public List<StoredEpochKey> EpochKeys { get; set; } = [];
+
+    /// <summary>
+    /// Rises on every publish and never resets. Recipients refuse anything that does not advance it,
+    /// which is what makes a replayed update detectable.
+    /// </summary>
+    public long PresenceSequence { get; set; }
+
+    /// <summary>
+    /// The highest epoch the relay has actually accepted. Payloads are sealed under this rather than the
+    /// newest key we hold, because a key contacts have never seen is a key they cannot decrypt with.
+    /// </summary>
+    public int PublishedEpoch { get; set; }
 
     public string ShareCode { get; set; } = string.Empty;
 
