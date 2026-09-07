@@ -104,8 +104,11 @@ jobs:
           else
             # --target pins the tag to the commit this run built, and creates it if a tag push
             # was not what started the run.
+            # --generate-notes appends the commit summary since the previous release under the
+            # install instructions, so each release says what actually changed.
             gh release create "$TAG" Wyu2.zip repo.json \
               --target "$GITHUB_SHA" \
               --title "Wyu2 $TAG" \
-              --notes "$NOTES"
+              --notes "$NOTES" \
+              --generate-notes
           fi
