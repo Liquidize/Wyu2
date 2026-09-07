@@ -268,6 +268,22 @@ public sealed class ConfigWindow : Window
             }
         }
 
+        if (UiHelpers.Checkbox("Movement trails", () => radar.ShowTrails, v => radar.ShowTrails = v,
+                "A fading breadcrumb behind each contact on the radar and the map, so you can see which " +
+                "way they are heading. Built from updates you already have; nothing extra is sent or stored."))
+        {
+            config.Save();
+        }
+
+        using (ImRaii.Disabled(!radar.ShowTrails))
+        {
+            if (UiHelpers.SliderFloat("Trail length", () => radar.TrailSeconds, v => radar.TrailSeconds = v,
+                    5f, 120f, "%.0f seconds"))
+            {
+                config.Save();
+            }
+        }
+
         if (UiHelpers.Checkbox("Pulse map markers", () => config.AnimateMapMarkers,
                 v => config.AnimateMapMarkers = v,
                 "Sends a sonar ring out of each marker on the friend map."))

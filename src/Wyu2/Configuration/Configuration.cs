@@ -76,6 +76,12 @@ public sealed class RadarSettings
 
     /// <summary>Seconds for one full rotation.</summary>
     public float SweepSeconds { get; set; } = 3f;
+
+    /// <summary>Draw a fading breadcrumb trail behind each contact.</summary>
+    public bool ShowTrails { get; set; } = true;
+
+    /// <summary>How many seconds of movement a trail keeps.</summary>
+    public float TrailSeconds { get; set; } = 25f;
     public float BlipSize { get; set; } = 6f;
     public float Opacity { get; set; } = 0.9f;
     public Vector4 BackgroundColor { get; set; } = new(0.03f, 0.05f, 0.08f, 0.72f);

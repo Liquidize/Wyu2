@@ -218,6 +218,9 @@ public sealed class ZoneMapWindow : Window
             var colour = UiHelpers.Color(tint);
             var markerRadius = 6f;
 
+            if (config.Radar.ShowTrails)
+                DrawTrail(drawList, friend, map, origin, side, uvMin, span, tint);
+
             // A map has no sweep to key off, so each marker runs its own sonar ping. The phase offset is
             // derived from the account id, which keeps markers from all pulsing in lockstep and keeps
             // each one's rhythm the same from session to session.
@@ -266,6 +269,48 @@ public sealed class ZoneMapWindow : Window
 
         DrawSelfMarker(drawList, map, origin, side, uvMin, span);
         drawList.PopClipRect();
+    }
+
+    /// <summary>
+    /// The same breadcrumb trail the radar draws, in map space. Points outside the visible area break
+    /// the line instead of being clamped to the edge.
+    /// </summary>
+    private static void DrawTrail(
+        ImDrawListPtr drawList,
+        TrackedFriend friend,
+        Map map,
+        Vector2 origin,
+        float side,
+        Vector2 uvMin,
+        Vector2 span,
+        Vector4 tint)
+    {
+        var points = friend.Trail.Points;
+        if (points.Count < 2)
+            return;
+
+        Vector2? previous = null;
+        for (var i = 0; i < points.Count; i++)
+        {
+            var uv = MapMath.WorldToTextureUv(points[i].Position, map);
+            var point = origin + (((uv - uvMin) / span) * side);
+
+            if (point.X < origin.X || point.Y < origin.Y ||
+                point.X > origin.X + side || point.Y > origin.Y + side)
+            {
+                previous = null;
+                continue;
+            }
+
+            if (previous is { } from)
+            {
+                var fade = friend.Trail.Freshness(i);
+                var segment = tint with { W = tint.W * fade * 0.5f };
+                drawList.AddLine(from, point, UiHelpers.Color(segment), 1f + (fade * 1.4f));
+            }
+
+            previous = point;
+        }
     }
 
     private void DrawSelfMarker(ImDrawListPtr drawList, Map map, Vector2 origin, float side, Vector2 uvMin, Vector2 span)

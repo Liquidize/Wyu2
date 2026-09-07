@@ -1,5 +1,6 @@
 using System.Numerics;
 using Wyu2.Configuration;
+using Wyu2.Game;
 using Wyu2.Protocol;
 
 namespace Wyu2.Model;
@@ -55,6 +56,9 @@ public sealed class TrackedFriend
     public PresencePayload? LastKnownPayload { get; set; }
 
     public DateTime? LastKnownAt { get; set; }
+
+    /// <summary>Recent positions, kept locally so the radar and map can show which way they are going.</summary>
+    public PositionTrail Trail { get; } = new();
 
     // ------------------------------------------------------------------ derived
 

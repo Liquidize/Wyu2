@@ -18,6 +18,7 @@ public sealed class RadarWindow : Window
     private readonly PresenceHub hub;
     private readonly NearbyScanner scanner;
     private readonly List<Blip> blips = [];
+    private Vector3 selfPosition;
 
     public RadarWindow(Configuration.Configuration config, PresenceHub hub, NearbyScanner scanner)
         : base("Wyu2 radar##wyu2-radar")
@@ -179,6 +180,7 @@ public sealed class RadarWindow : Window
     private void CollectBlips(Vector3 selfPosition, uint selfEntityId)
     {
         blips.Clear();
+        this.selfPosition = selfPosition;
 
         var territory = (ushort)Service.ClientState.TerritoryType;
         var instance = Service.ClientState.Instance;
@@ -208,7 +210,8 @@ public sealed class RadarWindow : Window
                 colour,
                 friend.ActivityText,
                 friend.JobAbbreviation,
-                friend.Sources.HasFlag(PresenceSource.Nearby)));
+                friend.Sources.HasFlag(PresenceSource.Nearby),
+                friend));
         }
 
         if (!config.TrackNonConsentingGameFriends)
@@ -227,7 +230,8 @@ public sealed class RadarWindow : Window
                 UiHelpers.Muted,
                 "In-game friend (not sharing)",
                 string.Empty,
-                true));
+                true,
+                null));
         }
     }
 
@@ -271,6 +275,9 @@ public sealed class RadarWindow : Window
             }
 
             var point = centre + offset;
+
+            if (config.Radar.ShowTrails && blip.Source is { } source)
+                DrawTrail(drawList, centre, radius, yaw, scale, source, blip.Color);
 
             // How long since the sweep last crossed this blip's bearing. Derived from the bearing rather
             // than remembered per blip, so contacts coming and going never desynchronise.
@@ -348,6 +355,45 @@ public sealed class RadarWindow : Window
         }
     }
 
+    /// <summary>
+    /// The breadcrumb trail, oldest segment faintest. Segments that leave the scope break the line
+    /// rather than being clamped to the rim, which would draw a path nobody walked.
+    /// </summary>
+    private void DrawTrail(
+        ImDrawListPtr drawList,
+        Vector2 centre,
+        float radius,
+        float yaw,
+        float scale,
+        TrackedFriend friend,
+        Vector4 colour)
+    {
+        var points = friend.Trail.Points;
+        if (points.Count < 2)
+            return;
+
+        Vector2? previous = null;
+        for (var i = 0; i < points.Count; i++)
+        {
+            var offset = CameraUtil.WorldOffsetToRadar(points[i].Position - selfPosition, yaw) * scale;
+            if (offset.Length() > radius - 4f)
+            {
+                previous = null;
+                continue;
+            }
+
+            var point = centre + offset;
+            if (previous is { } from)
+            {
+                var fade = friend.Trail.Freshness(i);
+                var segment = colour with { W = colour.W * fade * 0.5f };
+                drawList.AddLine(from, point, UiHelpers.Color(segment), 1f + (fade * 1.4f));
+            }
+
+            previous = point;
+        }
+    }
+
     private static void DrawArrow(ImDrawListPtr drawList, Vector2 point, Vector2 offset, uint colour)
     {
         var direction = Vector2.Normalize(offset);
@@ -406,5 +452,6 @@ public sealed class RadarWindow : Window
         Vector4 Color,
         string Activity,
         string Job,
-        bool Live);
+        bool Live,
+        TrackedFriend? Source);
 }

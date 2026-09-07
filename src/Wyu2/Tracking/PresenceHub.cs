@@ -254,6 +254,7 @@ public sealed class PresenceHub : IDisposable
             }
 
             UpdateProximity(friend, player?.Position, myTerritory, myInstance, myWorld);
+            RecordTrail(friend, payload);
 
             var territory = payload.TerritoryTypeId ?? 0;
             friend.ZoneName = data.GetZoneName(territory);
@@ -275,6 +276,29 @@ public sealed class PresenceHub : IDisposable
                 ? MapMath.WorldToMapCoordinates(position, map.Value)
                 : null;
         }
+    }
+
+    /// <summary>
+    /// Appends to a contact's breadcrumb trail. Uses the ImGui clock so the trail ages on the same
+    /// timeline the windows draw on, and only runs while trails are switched on so the buffers stay
+    /// empty for anybody who does not want them.
+    /// </summary>
+    private void RecordTrail(TrackedFriend friend, PresencePayload payload)
+    {
+        if (!config.Radar.ShowTrails)
+        {
+            if (friend.Trail.Count > 0)
+                friend.Trail.Clear();
+
+            return;
+        }
+
+        if (friend.Position is not { } position || payload.TerritoryTypeId is not { } territory)
+            return;
+
+        var now = Dalamud.Bindings.ImGui.ImGui.GetTime();
+        friend.Trail.Record(position, territory, now);
+        friend.Trail.PruneOlderThan(now, MathF.Max(2f, config.Radar.TrailSeconds));
     }
 
     /// <summary>
