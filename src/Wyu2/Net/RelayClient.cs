@@ -277,10 +277,30 @@ public sealed class RelayClient : IDisposable
     {
         ObjectDisposedException => "The connection was replaced; retrying shortly.",
         TaskCanceledException => "The relay did not answer in time.",
+        HttpRequestException when IsTlsFailure(ex) =>
+            "The TLS handshake with the relay failed. If nothing is terminating HTTPS in front of it, " +
+            "use an http:// URL; if something is, its certificate is missing, expired, or issued for a " +
+            "different name.",
         HttpRequestException http => $"Could not reach the relay: {http.Message}",
         JsonException => "The relay sent a response this plugin could not read.",
         _ => ex.Message,
     };
+
+    /// <summary>
+    /// True when the failure was the TLS handshake rather than the request. Worth separating: the usual
+    /// cause is an https:// URL pointed at a relay that is only listening on plain HTTP, and the raw
+    /// exception text for that is famously unhelpful.
+    /// </summary>
+    private static bool IsTlsFailure(Exception? ex)
+    {
+        for (var current = ex; current is not null; current = current.InnerException)
+        {
+            if (current is System.Security.Authentication.AuthenticationException)
+                return true;
+        }
+
+        return false;
+    }
 
     public void Dispose()
     {

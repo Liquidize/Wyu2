@@ -1,6 +1,14 @@
-{
-	email {$WYU2_ACME_EMAIL}
-}
+# Terminates TLS for the Wyu2 relay. Caddy fetches and renews a Let's Encrypt
+# certificate for WYU2_DOMAIN on its own, provided that name resolves to this
+# machine and ports 80 and 443 reach it.
+#
+# Want expiry notices from Let's Encrypt? Uncomment this block and put your
+# address in it. It is left out by default because an empty value here is a
+# config error, not a no-op.
+#
+# {
+# 	email you@example.com
+# }
 
 {$WYU2_DOMAIN} {
 	encode zstd gzip

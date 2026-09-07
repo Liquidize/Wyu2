@@ -25,7 +25,12 @@ docker compose --profile tls up -d
 ```
 
 The bundled Caddy (`deploy/Caddyfile`) fetches a Let's Encrypt certificate and proxies
-`https://$WYU2_DOMAIN` to the relay. Set `WYU2_ACME_EMAIL` if you want expiry warnings.
+`https://$WYU2_DOMAIN` to the relay. For expiry notices, uncomment the `email` block in that file.
+
+Both preconditions are load bearing: `WYU2_DOMAIN` has to resolve to this machine, and ports 80 and 443
+have to reach it. If Caddy cannot complete the ACME challenge it still answers on 443 but has no
+certificate to offer, and clients see a TLS **internal error** alert rather than a connection failure.
+`docker compose logs caddy` says which challenge failed and why.
 
 ### With your own proxy
 

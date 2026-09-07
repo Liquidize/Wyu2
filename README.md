@@ -126,8 +126,9 @@ and bring up the bundled Caddy:
 docker compose --profile tls up -d
 ```
 
-Caddy fetches a certificate from Let's Encrypt and proxies `https://$WYU2_DOMAIN` to the relay. Either
-way, paste the URL into the plugin's **Relay** tab and create an account.
+Caddy fetches a certificate from Let's Encrypt and proxies `https://$WYU2_DOMAIN` to the relay, so that
+name must already resolve to the machine and ports 80 and 443 must reach it. Either way, paste the URL
+into the plugin's **Relay** tab and create an account.
 
 Without Docker:
 
