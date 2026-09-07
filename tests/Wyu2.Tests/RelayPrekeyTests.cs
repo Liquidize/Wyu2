@@ -124,7 +124,7 @@ public class RelayPrekeyTests : IDisposable
         var account = Register("Ysayle", signing: null);
         var stranger = Signer();
 
-        Assert.Equal(StoreResult.NotFound, Publish(account, Bundle(stranger, account.Id, epoch: 1)));
+        Assert.Equal(StoreResult.NoSigningKey, Publish(account, Bundle(stranger, account.Id, epoch: 1)));
         Assert.Null(account.Prekey);
     }
 
@@ -173,8 +173,8 @@ public class RelayPrekeyTests : IDisposable
 
         Assert.Equal(StoreResult.Ok, Publish(account, Bundle(signer, account.Id, epoch: 4)));
 
-        Assert.Equal(StoreResult.AlreadyExists, Publish(account, Bundle(signer, account.Id, epoch: 3)));
-        Assert.Equal(StoreResult.AlreadyExists, Publish(account, Bundle(signer, account.Id, epoch: 4)));
+        Assert.Equal(StoreResult.StaleEpoch, Publish(account, Bundle(signer, account.Id, epoch: 3)));
+        Assert.Equal(StoreResult.StaleEpoch, Publish(account, Bundle(signer, account.Id, epoch: 4)));
 
         Assert.Equal(4, account.Prekey?.Epoch);
     }

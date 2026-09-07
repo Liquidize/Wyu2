@@ -14,6 +14,12 @@ public enum StoreResult
     LimitReached,
     Invalid,
     RegistrationClosed,
+
+    /// <summary>An epoch key was offered before the account had a signing key to vouch for it.</summary>
+    NoSigningKey,
+
+    /// <summary>An epoch key that does not advance on the one already published.</summary>
+    StaleEpoch,
 }
 
 /// <summary>
@@ -234,7 +240,7 @@ public sealed class RelayStore
         lock (sync)
         {
             if (account.SigningPublicKey.Length == 0)
-                return StoreResult.NotFound;
+                return StoreResult.NoSigningKey;
 
             if (!bundle.IsPresent || !IsPlausiblePublicKey(bundle.EpochPublicKey))
                 return StoreResult.Invalid;
@@ -248,7 +254,7 @@ public sealed class RelayStore
             // Refusing an epoch that does not advance stops anybody who captured an old bundle from
             // replaying it to drag a contact back onto a key whose private half may already be known.
             if (account.Prekey is not null && bundle.Epoch <= account.Prekey.Epoch)
-                return StoreResult.AlreadyExists;
+                return StoreResult.StaleEpoch;
 
             account.Prekey = bundle;
             dirty = true;

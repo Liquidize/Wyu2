@@ -93,9 +93,9 @@ app.MapPost("/v1/me/prekey", (PublishPrekeyRequest request, HttpContext http, Re
     store.PublishPrekey(http.Account(), request) switch
     {
         StoreResult.Ok => Results.NoContent(),
-        StoreResult.NotFound => Fail(409, "no_signing_key",
+        StoreResult.NoSigningKey => Fail(409, "no_signing_key",
             "Publish a signing key with PATCH /v1/me before publishing an epoch key."),
-        StoreResult.AlreadyExists => Fail(409, "stale_epoch", "A newer epoch is already published."),
+        StoreResult.StaleEpoch => Fail(409, "stale_epoch", "A newer epoch is already published."),
         _ => Fail(400, "invalid_bundle", "That prekey bundle did not verify."),
     })
     .RequireAccount();
