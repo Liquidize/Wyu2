@@ -35,6 +35,21 @@ public static class ProtocolConstants
     /// <summary>Info string mixed into the key derivation so keys are unique to this application.</summary>
     public const string KeyDerivationInfo = "Wyu2/v1/presence";
 
+    /// <summary>Info string for beacon keys, keeping them distinct from presence keys.</summary>
+    public const string BeaconKeyDerivationInfo = "Wyu2/v1/beacon";
+
+    /// <summary>Default beacon lifetime, in seconds.</summary>
+    public const int DefaultBeaconTtlSeconds = 900;
+
+    /// <summary>Longest a beacon may live, in seconds.</summary>
+    public const int MaxBeaconTtlSeconds = 3 * 3600;
+
+    /// <summary>How many beacons one sender may have parked with one recipient at a time.</summary>
+    public const int MaxBeaconsPerSender = 8;
+
+    /// <summary>Longest a beacon label may be.</summary>
+    public const int MaxBeaconLabelLength = 60;
+
     /// <summary>Maximum members in one group.</summary>
     public const int MaxGroupMembers = 64;
 

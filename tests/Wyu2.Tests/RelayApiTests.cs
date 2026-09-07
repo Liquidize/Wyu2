@@ -168,7 +168,7 @@ public class RelayApiTests : IClassFixture<RelayApiTests.RelayFactory>
 
         var inboundKey = PresenceCrypto.DeriveKey(
             bob.Keys, alicesEntry.PublicKey, alice.AccountId, bob.AccountId);
-        var decrypted = PresenceCrypto.Open(
+        var decrypted = PresenceCrypto.Open<PresencePayload>(
             inboundKey, received.Nonce, received.Ciphertext, alice.AccountId, bob.AccountId);
 
         Assert.Equal(payload, decrypted);

@@ -43,7 +43,7 @@ public class PresenceCryptoTests
 
         var payload = SamplePayload();
         var envelope = PresenceCrypto.Seal(sealKey, payload, Alice, Bob);
-        var opened = PresenceCrypto.Open(openKey, envelope.Nonce, envelope.Ciphertext, Alice, Bob);
+        var opened = PresenceCrypto.Open<PresencePayload>(openKey, envelope.Nonce, envelope.Ciphertext, Alice, Bob);
 
         Assert.Equal(payload, opened);
         Assert.Equal(Bob, envelope.RecipientAccountId);
@@ -84,7 +84,7 @@ public class PresenceCryptoTests
 
         var malloryKey = PresenceCrypto.DeriveKey(mallory, alice.ExportPublicKeyBase64(), Alice, Mallory);
 
-        Assert.Null(PresenceCrypto.Open(malloryKey, envelope.Nonce, envelope.Ciphertext, Alice, Mallory));
+        Assert.Null(PresenceCrypto.Open<PresencePayload>(malloryKey, envelope.Nonce, envelope.Ciphertext, Alice, Mallory));
     }
 
     [Fact]
@@ -97,8 +97,8 @@ public class PresenceCryptoTests
         var envelope = PresenceCrypto.Seal(key, SamplePayload(), Alice, Bob);
 
         // Same key, but the associated data no longer matches the addressing.
-        Assert.Null(PresenceCrypto.Open(key, envelope.Nonce, envelope.Ciphertext, Alice, Mallory));
-        Assert.Null(PresenceCrypto.Open(key, envelope.Nonce, envelope.Ciphertext, Bob, Alice));
+        Assert.Null(PresenceCrypto.Open<PresencePayload>(key, envelope.Nonce, envelope.Ciphertext, Alice, Mallory));
+        Assert.Null(PresenceCrypto.Open<PresencePayload>(key, envelope.Nonce, envelope.Ciphertext, Bob, Alice));
     }
 
     [Fact]
@@ -113,7 +113,7 @@ public class PresenceCryptoTests
         var bytes = Convert.FromBase64String(envelope.Ciphertext);
         bytes[0] ^= 0xFF;
 
-        Assert.Null(PresenceCrypto.Open(key, envelope.Nonce, Convert.ToBase64String(bytes), Alice, Bob));
+        Assert.Null(PresenceCrypto.Open<PresencePayload>(key, envelope.Nonce, Convert.ToBase64String(bytes), Alice, Bob));
     }
 
     [Fact]
@@ -123,8 +123,8 @@ public class PresenceCryptoTests
         using var bob = AccountKeyPair.Create();
         var key = PresenceCrypto.DeriveKey(alice, bob.ExportPublicKeyBase64(), Alice, Bob);
 
-        Assert.Null(PresenceCrypto.Open(key, "not base64!", "also not base64", Alice, Bob));
-        Assert.Null(PresenceCrypto.Open(key, Convert.ToBase64String(new byte[4]), Convert.ToBase64String(new byte[8]), Alice, Bob));
+        Assert.Null(PresenceCrypto.Open<PresencePayload>(key, "not base64!", "also not base64", Alice, Bob));
+        Assert.Null(PresenceCrypto.Open<PresencePayload>(key, Convert.ToBase64String(new byte[4]), Convert.ToBase64String(new byte[8]), Alice, Bob));
     }
 
     [Fact]

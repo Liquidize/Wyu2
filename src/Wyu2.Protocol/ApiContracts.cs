@@ -191,3 +191,47 @@ public sealed record UpdateGroupRequest
     /// <summary>Mint a new join code, invalidating the old one. Existing members are unaffected.</summary>
     public bool RotateJoinCode { get; init; }
 }
+
+// ---------------------------------------------------------------- beacons
+
+/// <summary>One encrypted beacon, addressed to exactly one recipient.</summary>
+public sealed record BeaconEnvelope
+{
+    public string RecipientAccountId { get; init; } = string.Empty;
+    public string Nonce { get; init; } = string.Empty;
+    public string Ciphertext { get; init; } = string.Empty;
+}
+
+public sealed record PublishBeaconRequest
+{
+    /// <summary>Sender-chosen id, so the same beacon can be replaced or withdrawn later.</summary>
+    public string BeaconId { get; init; } = string.Empty;
+
+    public int TtlSeconds { get; init; } = ProtocolConstants.DefaultBeaconTtlSeconds;
+
+    public List<BeaconEnvelope> Envelopes { get; init; } = [];
+}
+
+public sealed record PublishBeaconResponse
+{
+    public int Accepted { get; init; }
+    public int Rejected { get; init; }
+    public long ServerTimeUnixMs { get; init; }
+}
+
+public sealed record ReceivedBeacon
+{
+    public string BeaconId { get; init; } = string.Empty;
+    public string SenderAccountId { get; init; } = string.Empty;
+    public string SenderDisplayName { get; init; } = string.Empty;
+    public string Nonce { get; init; } = string.Empty;
+    public string Ciphertext { get; init; } = string.Empty;
+    public long ReceivedAtUnixMs { get; init; }
+    public long ExpiresAtUnixMs { get; init; }
+}
+
+public sealed record FetchBeaconsResponse
+{
+    public List<ReceivedBeacon> Entries { get; init; } = [];
+    public long ServerTimeUnixMs { get; init; }
+}

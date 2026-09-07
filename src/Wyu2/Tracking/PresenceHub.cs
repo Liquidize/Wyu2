@@ -195,7 +195,7 @@ public sealed class PresenceHub : IDisposable
             if (key is null)
                 continue;
 
-            var payload = PresenceCrypto.Open(
+            var payload = PresenceCrypto.Open<PresencePayload>(
                 key, entry.Nonce, entry.Ciphertext, entry.SenderAccountId, config.AccountId);
 
             if (payload is null)
