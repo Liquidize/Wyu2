@@ -48,6 +48,14 @@ public sealed class TrackedFriend
     /// <summary>Character name as observed nearby; helps when they do not share their name.</summary>
     public string? NearbyName { get; set; }
 
+    /// <summary>
+    /// The last payload we had before they went quiet. Kept so the list can say where somebody was
+    /// rather than dropping them without explanation.
+    /// </summary>
+    public PresencePayload? LastKnownPayload { get; set; }
+
+    public DateTime? LastKnownAt { get; set; }
+
     // ------------------------------------------------------------------ derived
 
     public string ZoneName { get; set; } = string.Empty;
@@ -63,6 +71,15 @@ public sealed class TrackedFriend
     public Vector2? MapCoordinates { get; set; }
 
     public PresenceSource Sources { get; set; }
+
+    /// <summary>Distance in yalms, set only while they are in the same zone, instance and world.</summary>
+    public float? DistanceYalms { get; set; }
+
+    /// <summary>"142y NE", or null when they are not somewhere we can measure.</summary>
+    public string? DirectionText { get; set; }
+
+    /// <summary>Where they were last seen, for contacts with nothing live.</summary>
+    public string LastSeenZoneName { get; set; } = string.Empty;
 
     /// <summary>Best available display name: alias, then shared character name, then relay label.</summary>
     public string Name

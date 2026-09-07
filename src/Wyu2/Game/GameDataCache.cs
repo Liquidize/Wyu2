@@ -15,6 +15,7 @@ public sealed class GameDataCache
     private readonly Dictionary<uint, (string Name, string Abbreviation)> jobNames = [];
     private readonly Dictionary<uint, string> onlineStatusNames = [];
     private readonly Dictionary<uint, string> dutyNames = [];
+    private readonly Dictionary<uint, string> recipeNames = [];
 
     /// <summary>Zone name, e.g. "Ul'dah - Steps of Nald".</summary>
     public string GetZoneName(uint territoryTypeId)
@@ -105,6 +106,21 @@ public sealed class GameDataCache
         var name = Service.Data.GetExcelSheet<ContentFinderCondition>()
             .GetRowOrDefault(contentFinderConditionId)?.Name.ExtractText() ?? string.Empty;
         return dutyNames[contentFinderConditionId] = Capitalise(name);
+    }
+
+    /// <summary>Name of the item a recipe produces, which is what a crafter would call it.</summary>
+    public string GetRecipeName(uint recipeId)
+    {
+        if (recipeId == 0)
+            return string.Empty;
+
+        if (recipeNames.TryGetValue(recipeId, out var cached))
+            return cached;
+
+        var name = Service.Data.GetExcelSheet<Recipe>().GetRowOrDefault(recipeId)
+            ?.ItemResult.ValueNullable?.Name.ExtractText() ?? string.Empty;
+
+        return recipeNames[recipeId] = Capitalise(name);
     }
 
     /// <summary>Map row for a zone, used for coordinates and for drawing the map sheet.</summary>

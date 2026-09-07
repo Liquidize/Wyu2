@@ -248,11 +248,25 @@ public sealed class PresenceHub : IDisposable
 
     private void RefreshDerivedData()
     {
+        var player = Service.Objects.LocalPlayer;
+        var myTerritory = (ushort)Service.ClientState.TerritoryType;
+        var myInstance = Service.ClientState.Instance;
+        var myWorld = player?.CurrentWorld.RowId ?? 0;
+
         foreach (var friend in friends.Values)
         {
             var payload = friend.Payload;
             if (payload is null)
+            {
+                friend.DistanceYalms = null;
+                friend.DirectionText = null;
+                friend.LastSeenZoneName = friend.Settings.LastSeenTerritoryId == 0
+                    ? string.Empty
+                    : data.GetZoneName(friend.Settings.LastSeenTerritoryId);
                 continue;
+            }
+
+            UpdateProximity(friend, player?.Position, myTerritory, myInstance, myWorld);
 
             var territory = payload.TerritoryTypeId ?? 0;
             friend.ZoneName = data.GetZoneName(territory);
@@ -274,6 +288,39 @@ public sealed class PresenceHub : IDisposable
                 ? MapMath.WorldToMapCoordinates(position, map.Value)
                 : null;
         }
+    }
+
+    /// <summary>
+    /// Distance and compass bearing, but only when the two of you are genuinely in the same place: same
+    /// zone, same public instance and same world. Anything else and the coordinates describe a different
+    /// copy of the map, so a distance would be a lie.
+    /// </summary>
+    private static void UpdateProximity(
+        TrackedFriend friend,
+        System.Numerics.Vector3? myPosition,
+        ushort myTerritory,
+        uint myInstance,
+        uint myWorld)
+    {
+        friend.DistanceYalms = null;
+        friend.DirectionText = null;
+
+        if (myPosition is not { } me || friend.Payload is not { } payload)
+            return;
+
+        if (payload.TerritoryTypeId != myTerritory || friend.InstanceId != myInstance)
+            return;
+
+        var theirWorld = payload.CurrentWorldId;
+        if (theirWorld != 0 && myWorld != 0 && theirWorld != myWorld)
+            return;
+
+        if (friend.Position is not { } them)
+            return;
+
+        var distance = MapMath.FlatDistance(them, me);
+        friend.DistanceYalms = distance;
+        friend.DirectionText = Bearing.Describe(distance, Bearing.FromWorldDelta(them.X - me.X, them.Z - me.Z));
     }
 
     /// <summary>The one line the friend list and tooltips show.</summary>
@@ -318,8 +365,19 @@ public sealed class PresenceHub : IDisposable
                 continue;
             }
 
-            if (friend.LastUpdate is { } last && now - last > forgetAfter)
+            if (friend.LastUpdate is { } last && now - last > forgetAfter && friend.Payload is { } going)
             {
+                // Going quiet is not the same as never having been here. Keep the last thing we knew,
+                // and write it to the contact so it survives a restart.
+                friend.LastKnownPayload = going;
+                friend.LastKnownAt = friend.RelayUpdatedAt ?? last;
+
+                friend.Settings.LastSeenAtUnixMs =
+                    new DateTimeOffset(friend.LastKnownAt.Value, TimeSpan.Zero).ToUnixTimeMilliseconds();
+                friend.Settings.LastSeenTerritoryId = going.TerritoryTypeId ?? 0;
+                friend.Settings.LastSeenActivity = DescribeActivity(friend);
+                config.Save();
+
                 friend.Payload = null;
                 friend.RelayUpdatedAt = null;
                 friend.NearbyPosition = null;

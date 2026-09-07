@@ -7,6 +7,7 @@ using FFXIVClientStructs.FFXIV.Client.Enums;
 using Wyu2.Game;
 using Wyu2.Protocol;
 using CsOnlineStatus = FFXIVClientStructs.FFXIV.Client.UI.Info.InfoProxyCommonList.CharacterData.OnlineStatus;
+using RecipeNote = FFXIVClientStructs.FFXIV.Client.Game.UI.RecipeNote;
 
 namespace Wyu2.Tracking;
 
@@ -21,7 +22,7 @@ public readonly record struct ActivityResult(ActivityKind Kind, string? Detail, 
 /// Turns the pile of condition flags the game exposes into the one line a friend actually wants to read:
 /// "In Alexander - The Fist of the Father", "Fishing", "Fighting Ixali Windtalker", "Idle in Limsa".
 /// </summary>
-public sealed class ActivityResolver(GameDataCache data)
+public sealed unsafe class ActivityResolver(GameDataCache data)
 {
     /// <summary>Works out what the local player is up to.</summary>
     /// <param name="player">The local character.</param>
@@ -53,13 +54,24 @@ public sealed class ActivityResolver(GameDataCache data)
             return new ActivityResult(ActivityKind.Fishing, FishingDetail(territory));
 
         if (condition[ConditionFlag.Gathering] || condition[ConditionFlag.ExecutingGatheringAction])
-            return new ActivityResult(ActivityKind.Gathering, $"Gathering as {JobAbbreviation(player)}");
+        {
+            // While gathering the node is your target, which is the cheapest way to name it.
+            var node = GatheringNodeName(player);
+            return new ActivityResult(
+                ActivityKind.Gathering,
+                node is null ? $"Gathering as {JobAbbreviation(player)}" : $"Gathering {node}");
+        }
 
         if (condition[ConditionFlag.Crafting] ||
             condition[ConditionFlag.ExecutingCraftingAction] ||
             condition[ConditionFlag.PreparingToCraft])
         {
-            return new ActivityResult(ActivityKind.Crafting, $"Crafting as {JobAbbreviation(player)}");
+            var recipe = data.GetRecipeName(ActiveRecipeId());
+            return new ActivityResult(
+                ActivityKind.Crafting,
+                string.IsNullOrEmpty(recipe)
+                    ? $"Crafting as {JobAbbreviation(player)}"
+                    : $"Crafting {recipe}");
         }
 
         if (condition[ConditionFlag.Performing])
@@ -82,7 +94,7 @@ public sealed class ActivityResolver(GameDataCache data)
         if (condition[ConditionFlag.InCombat])
         {
             if (fate is not null)
-                return new ActivityResult(ActivityKind.InCombat, $"FATE: {fate.Name.TextValue}");
+                return new ActivityResult(ActivityKind.InCombat, DescribeFate(fate));
 
             var target = CombatTargetName(player);
             return new ActivityResult(
@@ -92,7 +104,7 @@ public sealed class ActivityResolver(GameDataCache data)
         }
 
         if (fate is not null)
-            return new ActivityResult(ActivityKind.Travelling, $"At FATE: {fate.Name.TextValue}");
+            return new ActivityResult(ActivityKind.Travelling, $"At {DescribeFate(fate)}");
 
         if (GameDataCache.IsHousing(use))
             return new ActivityResult(ActivityKind.Housing, use == TerritoryIntendedUse.HousingIndoor ? "Inside a house" : "In a housing ward");
@@ -185,6 +197,33 @@ public sealed class ActivityResolver(GameDataCache data)
     {
         var (_, abbreviation) = data.GetJob(player.ClassJob.RowId);
         return string.IsNullOrWhiteSpace(abbreviation) ? "an adventurer" : abbreviation;
+    }
+
+    /// <summary>FATE name with its completion, which is what decides whether it is worth joining.</summary>
+    private static string DescribeFate(IFate fate)
+    {
+        var name = fate.Name.TextValue;
+        return fate.Progress > 0
+            ? $"FATE: {name} ({fate.Progress}%)"
+            : $"FATE: {name}";
+    }
+
+    /// <summary>The gathering node currently targeted, or null when it cannot be read.</summary>
+    private static string? GatheringNodeName(IPlayerCharacter player)
+    {
+        var target = player.TargetObject;
+        if (target is null || target.ObjectKind != ObjectKind.GatheringPoint)
+            return null;
+
+        var name = target.Name.TextValue;
+        return string.IsNullOrWhiteSpace(name) ? null : name;
+    }
+
+    /// <summary>Recipe currently open in the crafting log, 0 when nothing is being made.</summary>
+    private static uint ActiveRecipeId()
+    {
+        var note = RecipeNote.Instance();
+        return note is null ? 0u : note->ActiveCraftRecipeId;
     }
 
     private static string? CombatTargetName(IPlayerCharacter player)

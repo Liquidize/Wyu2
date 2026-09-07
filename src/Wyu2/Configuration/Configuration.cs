@@ -34,6 +34,17 @@ public sealed class ContactSettings
 
     /// <summary>Announce in chat when they come online or change zone.</summary>
     public bool NotifyOnZoneChange { get; set; }
+
+    /// <summary>
+    /// Where this contact was the last time they published anything, kept so a friend who logs out
+    /// leaves "last seen 20 minutes ago in Eulmore" behind rather than an empty row. Written when they
+    /// go quiet, so it survives a restart.
+    /// </summary>
+    public long LastSeenAtUnixMs { get; set; }
+
+    public ushort LastSeenTerritoryId { get; set; }
+
+    public string? LastSeenActivity { get; set; }
 }
 
 /// <summary>How the radar window draws.</summary>

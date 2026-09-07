@@ -209,7 +209,9 @@ public sealed class MainWindow : Window
         ImGui.TableNextColumn();
         if (payload is null)
         {
-            UiHelpers.TextMuted("Waiting for an update");
+            UiHelpers.TextMuted(string.IsNullOrWhiteSpace(friend.Settings.LastSeenActivity)
+                ? "Waiting for an update"
+                : $"Was: {friend.Settings.LastSeenActivity}");
         }
         else
         {
@@ -233,7 +235,7 @@ public sealed class MainWindow : Window
         var payload = friend.Payload;
         if (payload?.TerritoryTypeId is null)
         {
-            UiHelpers.TextMuted("Not shared");
+            DrawLastSeen(friend);
             return;
         }
 
@@ -245,12 +247,42 @@ public sealed class MainWindow : Window
         if (!string.IsNullOrEmpty(coordinates) && ImGui.IsItemHovered())
             ImGui.SetTooltip(coordinates.Trim());
 
+        // Only set when the two of you are in the same zone, instance and world.
+        if (friend.DirectionText is { } direction)
+        {
+            ImGui.SameLine();
+            UiHelpers.TextMuted(direction);
+        }
+
         ImGui.SameLine();
         if (ImGui.SmallButton("Map"))
             mapWindow.FocusOn(friend);
 
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("Show this zone on the friend map.");
+    }
+
+    /// <summary>What we show once somebody has gone quiet, rather than an empty row.</summary>
+    private static void DrawLastSeen(TrackedFriend friend)
+    {
+        var settings = friend.Settings;
+        if (settings.LastSeenAtUnixMs == 0)
+        {
+            UiHelpers.TextMuted("Not shared");
+            return;
+        }
+
+        var zone = string.IsNullOrWhiteSpace(friend.LastSeenZoneName) ? "somewhere" : friend.LastSeenZoneName;
+        var since = DateTime.UtcNow - DateTimeOffset.FromUnixTimeMilliseconds(settings.LastSeenAtUnixMs).UtcDateTime;
+
+        UiHelpers.TextMuted($"Last seen in {zone}");
+        if (!ImGui.IsItemHovered())
+            return;
+
+        using var tooltip = ImRaii.Tooltip();
+        ImGui.TextUnformatted($"Last update {UiHelpers.FormatAge(since)}");
+        if (!string.IsNullOrWhiteSpace(settings.LastSeenActivity))
+            UiHelpers.TextMuted(settings.LastSeenActivity!);
     }
 
     private static string MapCoordinateText(Vector2 coordinates)
