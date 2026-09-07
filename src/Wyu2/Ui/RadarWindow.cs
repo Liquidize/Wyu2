@@ -284,6 +284,9 @@ public sealed class RadarWindow : Window
             if (config.Radar.ShowTrails && blip.Source is { } source)
                 DrawTrail(drawList, centre, radius, yaw, scale, source, blip.Color);
 
+            if (config.Radar.ShowPrediction && blip.Source is { } moving)
+                DrawPrediction(drawList, centre, radius, yaw, scale, moving, blip.Color);
+
             // How long since the sweep last crossed this blip's bearing. Derived from the bearing rather
             // than remembered per blip, so contacts coming and going never desynchronise.
             var strength = 0f;
@@ -453,6 +456,44 @@ public sealed class RadarWindow : Window
 
             previous = point;
         }
+    }
+
+    /// <summary>
+    /// A ghost showing where somebody will be shortly, drawn from the velocity their trail already
+    /// implies. Useful for joining a train that is already rolling, where aiming at where somebody is
+    /// means arriving where they were.
+    /// </summary>
+    private void DrawPrediction(
+        ImDrawListPtr drawList,
+        Vector2 centre,
+        float radius,
+        float yaw,
+        float scale,
+        TrackedFriend friend,
+        Vector4 colour)
+    {
+        if (friend.Position is not { } position)
+            return;
+
+        if (Interception.EstimateVelocity(friend.Trail, ImGui.GetTime()) is not { } velocity)
+            return;
+
+        // Below a walking pace the direction is noise, and a ghost jittering around somebody standing
+        // still is worse than no ghost.
+        if (Interception.Speed(velocity) < 1.5f)
+            return;
+
+        var ahead = Interception.Predict(position, velocity, MathF.Max(1f, config.Radar.PredictSeconds));
+        var offset = CameraUtil.WorldOffsetToRadar(ahead - selfPosition, yaw) * scale;
+        if (offset.Length() > radius - 4f)
+            return;
+
+        var from = centre + (CameraUtil.WorldOffsetToRadar(position - selfPosition, yaw) * scale);
+        var to = centre + offset;
+        var ghost = UiHelpers.Color(colour with { W = colour.W * 0.45f });
+
+        drawList.AddLine(from, to, ghost, 1.2f);
+        drawList.AddCircle(to, config.Radar.BlipSize * 0.8f, ghost, 12, 1.4f);
     }
 
     private static void DrawArrow(ImDrawListPtr drawList, Vector2 point, Vector2 offset, uint colour)

@@ -14,6 +14,7 @@ namespace Wyu2.Tracking;
 public sealed unsafe class AlertService(Configuration.Configuration config, GameDataCache data)
 {
     private readonly Dictionary<string, ContactState> previous = new(StringComparer.Ordinal);
+    private readonly GeofenceWatcher fences = new();
 
     /// <summary>What we knew about a contact last tick, so a change can be spotted.</summary>
     private readonly record struct ContactState(bool Online, ushort Territory, uint Instance, bool InDuty);
@@ -24,6 +25,7 @@ public sealed unsafe class AlertService(Configuration.Configuration config, Game
         {
             // Logging back in should not replay everything that happened while we were away.
             previous.Clear();
+            fences.Clear();
             return;
         }
 
@@ -54,12 +56,55 @@ public sealed unsafe class AlertService(Configuration.Configuration config, Game
             Compare(friend, before, current, wanted, myTerritory, myInstance);
         }
 
+        EvaluateGeofences(friends);
+
         // Forget contacts that have gone away entirely, so re-adding somebody starts clean.
         if (previous.Count > friends.Count)
         {
             var live = friends.Select(f => f.AccountId).ToHashSet(StringComparer.Ordinal);
             foreach (var stale in previous.Keys.Where(k => !live.Contains(k)).ToList())
+            {
                 previous.Remove(stale);
+                fences.Forget(stale);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Runs every visible contact past the user's areas. Crossings are reported by the watcher, which
+    /// only fires on a transition, so standing inside a fence stays quiet.
+    /// </summary>
+    private void EvaluateGeofences(IReadOnlyList<TrackedFriend> friends)
+    {
+        if (!config.AlertsEnabled || !config.GeofenceAlertsEnabled || config.Geofences.Count == 0)
+            return;
+
+        var rules = config.Geofences.Select(g => g.ToRule()).ToList();
+        var me = Service.Objects.LocalPlayer?.Position;
+
+        foreach (var friend in friends)
+        {
+            if (!config.CanSee(friend.Settings))
+                continue;
+
+            var crossings = fences.Evaluate(
+                friend.AccountId,
+                friend.Payload?.TerritoryTypeId ?? 0,
+                friend.Position,
+                rules,
+                me);
+
+            foreach (var crossing in crossings)
+            {
+                var rule = config.Geofences.FirstOrDefault(g => g.Id == crossing.RuleId);
+                var where = string.IsNullOrWhiteSpace(rule?.Name) ? "one of your areas" : rule!.Name;
+
+                Raise(
+                    crossing.Entered
+                        ? $"{friend.Name} entered {where}."
+                        : $"{friend.Name} left {where}.",
+                    crossing.Entered ? NotificationType.Success : NotificationType.Info);
+            }
         }
     }
 

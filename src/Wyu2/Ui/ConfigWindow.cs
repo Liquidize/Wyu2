@@ -54,6 +54,12 @@ public sealed class ConfigWindow : Window
                 DrawRadar();
         }
 
+        using (var tab = ImRaii.TabItem("Areas"))
+        {
+            if (tab.Success)
+                DrawGeofences();
+        }
+
         using (var tab = ImRaii.TabItem("Other"))
         {
             if (tab.Success)
@@ -284,6 +290,24 @@ public sealed class ConfigWindow : Window
             }
         }
 
+        if (UiHelpers.Checkbox("Predict where people are heading", () => radar.ShowPrediction,
+                v => radar.ShowPrediction = v,
+                "Draws a ghost ahead of anybody on the move, worked out from the trail. Useful for " +
+                "cutting off a train that is already rolling, where aiming at somebody means arriving " +
+                "where they were."))
+        {
+            config.Save();
+        }
+
+        using (ImRaii.Disabled(!radar.ShowPrediction))
+        {
+            if (UiHelpers.SliderFloat("Look ahead", () => radar.PredictSeconds, v => radar.PredictSeconds = v,
+                    1f, 15f, "%.0f seconds"))
+            {
+                config.Save();
+            }
+        }
+
         if (UiHelpers.Checkbox("Pulse map markers", () => config.AnimateMapMarkers,
                 v => config.AnimateMapMarkers = v,
                 "Sends a sonar ring out of each marker on the friend map."))
@@ -376,6 +400,126 @@ public sealed class ConfigWindow : Window
             if (UiHelpers.SliderFloat("Marker size", () => native.MarkerSize, v => native.MarkerSize = v,
                     2f, 12f, "%.0f pixels"))
             {
+                config.Save();
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- areas
+
+    private void DrawGeofences()
+    {
+        ImGui.Spacing();
+        ImGui.TextWrapped(
+            "Areas you want to hear about. An alert fires when somebody crosses in or out, not for as " +
+            "long as they stand there, and only for contacts you can already see.");
+
+        ImGui.Spacing();
+        if (UiHelpers.Checkbox("Enable area alerts", () => config.GeofenceAlertsEnabled,
+                v => config.GeofenceAlertsEnabled = v))
+        {
+            config.Save();
+        }
+
+        ImGui.Separator();
+
+        using (ImRaii.Disabled(!Service.ClientState.IsLoggedIn))
+        {
+            if (ImGui.Button("Watch this zone"))
+            {
+                var territory = (ushort)Service.ClientState.TerritoryType;
+                config.Geofences.Add(new Configuration.GeofenceSettings
+                {
+                    Name = data.GetZoneName(territory) is { Length: > 0 } zone ? zone : $"Zone {territory}",
+                    Scope = Game.GeofenceScope.Zone,
+                    TerritoryTypeId = territory,
+                });
+                config.Save();
+            }
+
+            ImGui.SameLine();
+            if (ImGui.Button("Watch where I am standing") &&
+                Service.Objects.LocalPlayer is { } player)
+            {
+                var territory = (ushort)Service.ClientState.TerritoryType;
+                config.Geofences.Add(new Configuration.GeofenceSettings
+                {
+                    Name = $"{data.GetZoneName(territory)} spot",
+                    Scope = Game.GeofenceScope.Radius,
+                    TerritoryTypeId = territory,
+                    CentreX = player.Position.X,
+                    CentreZ = player.Position.Z,
+                });
+                config.Save();
+            }
+        }
+
+        ImGui.SameLine();
+        if (ImGui.Button("Watch near me"))
+        {
+            config.Geofences.Add(new Configuration.GeofenceSettings
+            {
+                Name = "Near me",
+                Scope = Game.GeofenceScope.NearMe,
+            });
+            config.Save();
+        }
+
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Follows you around, wherever you go.");
+
+        ImGui.Separator();
+
+        if (config.Geofences.Count == 0)
+        {
+            UiHelpers.TextMuted("No areas yet.");
+            return;
+        }
+
+        foreach (var fence in config.Geofences.ToList())
+        {
+            using var id = ImRaii.PushId(fence.Id);
+
+            ImGui.SetNextItemWidth(180f);
+            var name = fence.Name;
+            if (ImGui.InputText("##name", ref name, 60))
+            {
+                fence.Name = name;
+                config.Save();
+            }
+
+            ImGui.SameLine();
+            UiHelpers.TextMuted(fence.Scope switch
+            {
+                Game.GeofenceScope.Zone => "whole zone",
+                Game.GeofenceScope.Radius => $"{fence.RadiusYalms:0}y circle",
+                _ => $"within {fence.RadiusYalms:0}y of me",
+            });
+
+            if (fence.Scope != Game.GeofenceScope.Zone)
+            {
+                ImGui.SameLine();
+                ImGui.SetNextItemWidth(120f);
+                var radius = fence.RadiusYalms;
+                if (ImGui.SliderFloat("##radius", ref radius, 5f, 300f, "%.0f y"))
+                {
+                    fence.RadiusYalms = radius;
+                    config.Save();
+                }
+            }
+
+            ImGui.SameLine();
+            if (UiHelpers.Checkbox("in", () => fence.OnEnter, v => fence.OnEnter = v))
+                config.Save();
+
+            ImGui.SameLine();
+            if (UiHelpers.Checkbox("out", () => fence.OnExit, v => fence.OnExit = v))
+                config.Save();
+
+            ImGui.SameLine();
+            if (ImGui.SmallButton("Remove"))
+            {
+                config.Geofences.RemoveAll(g => g.Id == fence.Id);
                 config.Save();
             }
         }
@@ -479,5 +623,39 @@ public sealed class ConfigWindow : Window
         {
             config.Save();
         }
+
+        ImGui.Separator();
+        ImGui.TextUnformatted("When you are both usually around");
+        UiHelpers.HelpMarker(
+            "Worked out from presence you have already received, kept on this machine and never sent " +
+            "anywhere. It takes a week or two of playing before it says anything useful.");
+
+        DrawOverlap();
+    }
+
+    /// <summary>The best times to catch each contact, which is the thing people actually want to know.</summary>
+    private void DrawOverlap()
+    {
+        var any = false;
+
+        foreach (var contact in config.SnapshotContacts())
+        {
+            var windows = hub.BestOverlap(contact.AccountId, count: 2);
+            if (windows.Count == 0)
+                continue;
+
+            any = true;
+            var name = string.IsNullOrWhiteSpace(contact.Alias) ? contact.DisplayName : contact.Alias!;
+            var described = string.Join(
+                ", ",
+                windows.Select(w => $"{w.Day}s {w.StartHour:00}:00-{w.EndHourExclusive:00}:00"));
+
+            ImGui.TextUnformatted(name);
+            ImGui.SameLine();
+            UiHelpers.TextMuted(described);
+        }
+
+        if (!any)
+            UiHelpers.TextMuted("Nothing yet - come back after a few sessions.");
     }
 }

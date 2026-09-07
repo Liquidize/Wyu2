@@ -34,6 +34,10 @@ public sealed class PresenceHub : IDisposable
 
     private long sequence;
     private long reservedSequence;
+
+    private readonly Dictionary<string, OverlapHistogram> overlaps = new(StringComparer.Ordinal);
+    private DateTime lastOverlapSample = DateTime.MinValue;
+    private DateTime lastOverlapSave = DateTime.MinValue;
     private readonly CancellationTokenSource cancellation = new();
 
     private DateTime lastPublish = DateTime.MinValue;
@@ -100,6 +104,7 @@ public sealed class PresenceHub : IDisposable
         }
 
         RefreshDerivedData();
+        RecordOverlap(now);
         ForgetStaleFriends(now);
         Friends = Order(friends.Values);
 
@@ -349,12 +354,13 @@ public sealed class PresenceHub : IDisposable
 
     /// <summary>
     /// Appends to a contact's breadcrumb trail. Uses the ImGui clock so the trail ages on the same
-    /// timeline the windows draw on, and only runs while trails are switched on so the buffers stay
-    /// empty for anybody who does not want them.
+    /// timeline the windows draw on, and only runs while something wants it so the buffers stay empty
+    /// for anybody who does not. Prediction reads the same buffer to work out which way somebody is
+    /// going, so it counts as a reason to keep one.
     /// </summary>
     private void RecordTrail(TrackedFriend friend, PresencePayload payload)
     {
-        if (!config.Radar.ShowTrails)
+        if (!config.Radar.ShowTrails && !config.Radar.ShowPrediction)
         {
             if (friend.Trail.Count > 0)
                 friend.Trail.Clear();
@@ -366,8 +372,10 @@ public sealed class PresenceHub : IDisposable
             return;
 
         var now = Dalamud.Bindings.ImGui.ImGui.GetTime();
+        var keep = config.Radar.ShowTrails ? MathF.Max(2f, config.Radar.TrailSeconds) : 5f;
+
         friend.Trail.Record(position, territory, now);
-        friend.Trail.PruneOlderThan(now, MathF.Max(2f, config.Radar.TrailSeconds));
+        friend.Trail.PruneOlderThan(now, keep);
     }
 
     /// <summary>
@@ -402,6 +410,86 @@ public sealed class PresenceHub : IDisposable
         friend.DistanceYalms = distance;
         friend.DirectionText = Bearing.Describe(distance, Bearing.FromWorldDelta(them.X - me.X, them.Z - me.Z));
     }
+
+    /// <summary>
+    /// Accumulates time spent online at the same moment as each contact, so "when are we both usually
+    /// around" can be answered without anybody having to keep a diary. Entirely local: this is derived
+    /// from presence already received and is never published.
+    /// </summary>
+    private void RecordOverlap(DateTime now)
+    {
+        if (!Service.ClientState.IsLoggedIn)
+        {
+            lastOverlapSample = DateTime.MinValue;
+            return;
+        }
+
+        if (lastOverlapSample == DateTime.MinValue)
+        {
+            lastOverlapSample = now;
+            return;
+        }
+
+        var span = now - lastOverlapSample;
+        if (span < TimeSpan.FromSeconds(30))
+            return;
+
+        lastOverlapSample = now;
+
+        // A long gap means the game was closed or the machine asleep, not that the two of you spent the
+        // afternoon together.
+        if (span > TimeSpan.FromMinutes(5))
+            return;
+
+        // Local time, because the answer people want is "Tuesday evening", not a UTC hour.
+        var when = DateTimeOffset.Now;
+        foreach (var friend in friends.Values)
+        {
+            if (friend.IsOnline)
+                HistogramFor(friend.AccountId).Add(when, span);
+        }
+
+        if (now - lastOverlapSave > TimeSpan.FromMinutes(10))
+        {
+            SaveOverlaps();
+            lastOverlapSave = now;
+        }
+    }
+
+    private OverlapHistogram HistogramFor(string accountId)
+    {
+        if (overlaps.TryGetValue(accountId, out var existing))
+            return existing;
+
+        var restored = OverlapHistogram.FromSnapshot(config.FindContact(accountId)?.OverlapMinutes);
+        overlaps[accountId] = restored;
+        return restored;
+    }
+
+    /// <summary>
+    /// Writes the histograms back. Done on a slow timer and again on shutdown rather than on every
+    /// sample: this is a hundred and sixty eight floats per contact and nobody needs it durable to the
+    /// minute.
+    /// </summary>
+    private void SaveOverlaps()
+    {
+        var changed = false;
+        foreach (var (accountId, histogram) in overlaps)
+        {
+            if (config.FindContact(accountId) is not { } settings)
+                continue;
+
+            settings.OverlapMinutes = histogram.Snapshot();
+            changed = true;
+        }
+
+        if (changed)
+            config.Save();
+    }
+
+    /// <summary>The stretches when you and a contact are most often online together, busiest first.</summary>
+    public IReadOnlyList<OverlapWindow> BestOverlap(string accountId, int count = 3)
+        => HistogramFor(accountId).BestWindows(count);
 
     /// <summary>The one line the friend list and tooltips show.</summary>
     public static string DescribeActivity(TrackedFriend friend)
@@ -478,6 +566,7 @@ public sealed class PresenceHub : IDisposable
 
     public void Dispose()
     {
+        SaveOverlaps();
         cancellation.Cancel();
         cancellation.Dispose();
     }

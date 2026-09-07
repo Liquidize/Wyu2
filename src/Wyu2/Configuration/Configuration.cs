@@ -36,6 +36,12 @@ public sealed class ContactSettings
     /// </summary>
     public bool IsDirectContact { get; set; } = true;
 
+    /// <summary>
+    /// How much time the two of you have been online together, bucketed by day and hour. Local only:
+    /// this is built from presence already received and is never published or sent anywhere.
+    /// </summary>
+    public float[] OverlapMinutes { get; set; } = [];
+
     /// <summary>Groups you share with this person, if any.</summary>
     public List<string> GroupIds { get; set; } = [];
 
@@ -84,6 +90,45 @@ public sealed class ContactSettings
     public ushort LastSeenTerritoryId { get; set; }
 
     public string? LastSeenActivity { get; set; }
+}
+
+/// <summary>
+/// A spatial alert rule as written to the configuration file. A mutable mirror of the immutable
+/// <see cref="Wyu2.Game.GeofenceRule"/> the evaluator works with, because a serialiser round-tripping
+/// init-only records is a fragile thing to depend on for something a user cannot repair by hand.
+/// </summary>
+public sealed class GeofenceSettings
+{
+    public string Id { get; set; } = Guid.NewGuid().ToString("N");
+
+    public string Name { get; set; } = string.Empty;
+
+    public Wyu2.Game.GeofenceScope Scope { get; set; } = Wyu2.Game.GeofenceScope.Zone;
+
+    public ushort TerritoryTypeId { get; set; }
+
+    public float CentreX { get; set; }
+
+    public float CentreZ { get; set; }
+
+    public float RadiusYalms { get; set; } = 50f;
+
+    public bool OnEnter { get; set; } = true;
+
+    public bool OnExit { get; set; }
+
+    public Wyu2.Game.GeofenceRule ToRule() => new()
+    {
+        Id = Id,
+        Name = Name,
+        Scope = Scope,
+        TerritoryTypeId = TerritoryTypeId,
+        CentreX = CentreX,
+        CentreZ = CentreZ,
+        RadiusYalms = RadiusYalms,
+        OnEnter = OnEnter,
+        OnExit = OnExit,
+    };
 }
 
 /// <summary>One of our own epoch keys as written to the configuration file.</summary>
@@ -140,6 +185,12 @@ public sealed class RadarSettings
 
     /// <summary>Seconds for one full rotation.</summary>
     public float SweepSeconds { get; set; } = 3f;
+
+    /// <summary>Show where a moving contact will be shortly, and how to cut them off.</summary>
+    public bool ShowPrediction { get; set; }
+
+    /// <summary>How far ahead to project a moving contact, in seconds.</summary>
+    public float PredictSeconds { get; set; } = 4f;
 
     /// <summary>Draw a fading breadcrumb trail behind each contact.</summary>
     public bool ShowTrails { get; set; } = true;
@@ -264,6 +315,9 @@ public sealed class Configuration : IPluginConfiguration
     /// <summary>Local settings for the groups you belong to.</summary>
     public List<GroupSettings> Groups { get; set; } = [];
 
+    /// <summary>Areas worth being told about when somebody crosses into or out of them.</summary>
+    public List<GeofenceSettings> Geofences { get; set; } = [];
+
     /// <summary>
     /// Guards <see cref="Contacts"/>. The relay sync runs on the thread pool while the windows and the
     /// hub read the same list from the framework thread, so every access goes through the helpers below.
@@ -330,6 +384,9 @@ public sealed class Configuration : IPluginConfiguration
 
     /// <summary>Which of the game's sixteen chat sound effects to play.</summary>
     public int AlertSoundId { get; set; } = 1;
+
+    /// <summary>Raise alerts when a contact crosses one of your areas.</summary>
+    public bool GeofenceAlertsEnabled { get; set; } = true;
 
     /// <summary>Seconds after which an entry is drawn as stale.</summary>
     public int StaleAfterSeconds { get; set; } = 60;
