@@ -168,6 +168,10 @@ git commit -am "Release v1.2.3.4" && git tag v1.2.3.4 && git push --follow-tags
 The release workflow rebuilds, refuses to publish if the tag and `repo.json` disagree with the built
 assembly, and attaches `Wyu2.zip` and `repo.json` to the GitHub release.
 
+Dalamud fetches repository URLs without credentials, so the GitHub repository has to be **public** for
+the install URL above to resolve. On a private repository the release is created normally but every
+download returns 404.
+
 ## Limitations
 
 - Positions are only meaningful when two people are in the same zone, the same public instance and on
