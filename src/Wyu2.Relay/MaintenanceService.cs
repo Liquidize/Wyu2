@@ -2,7 +2,7 @@ using Microsoft.Extensions.Options;
 
 namespace Wyu2.Relay;
 
-/// <summary>Periodically expires presence blobs, prunes dead accounts and flushes the snapshot.</summary>
+/// <summary>Periodically expires presence blobs and beacons, prunes dead accounts and flushes the snapshot.</summary>
 public sealed class MaintenanceService(
     RelayStore store,
     IOptions<RelayOptions> options,
@@ -17,12 +17,12 @@ public sealed class MaintenanceService(
         {
             while (await timer.WaitForNextTickAsync(stoppingToken))
             {
-                var (blobs, requests, accounts) = store.Prune();
-                if (blobs + requests + accounts > 0)
+                var (blobs, beacons, requests, accounts) = store.Prune();
+                if (blobs + beacons + requests + accounts > 0)
                 {
                     log.LogDebug(
-                        "Pruned {Blobs} presence blobs, {Requests} requests, {Accounts} accounts",
-                        blobs, requests, accounts);
+                        "Pruned {Blobs} presence blobs, {Beacons} beacons, {Requests} requests, {Accounts} accounts",
+                        blobs, beacons, requests, accounts);
                 }
 
                 store.Save();

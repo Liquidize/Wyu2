@@ -16,15 +16,18 @@ public sealed class RadarWindow : Window
 {
     private readonly Configuration.Configuration config;
     private readonly PresenceHub hub;
+    private readonly BeaconService beacons;
     private readonly NearbyScanner scanner;
     private readonly List<Blip> blips = [];
     private Vector3 selfPosition;
 
-    public RadarWindow(Configuration.Configuration config, PresenceHub hub, NearbyScanner scanner)
+    public RadarWindow(
+        Configuration.Configuration config, PresenceHub hub, BeaconService beacons, NearbyScanner scanner)
         : base("Wyu2 radar##wyu2-radar")
     {
         this.config = config;
         this.hub = hub;
+        this.beacons = beacons;
         this.scanner = scanner;
 
         Size = new Vector2(320f, 380f);
@@ -95,6 +98,7 @@ public sealed class RadarWindow : Window
 
         CollectBlips(player.Position, player.EntityId);
         DrawBlips(drawList, centre, radius, yaw, sweepAngle);
+        DrawBeacons(drawList, centre, radius, yaw);
 
         if (config.Radar.ShowSelf)
             DrawSelf(drawList, centre, player.Rotation, yaw);
@@ -352,6 +356,62 @@ public sealed class RadarWindow : Window
                 if (ImGui.IsMouseClicked(ImGuiMouseButton.Left))
                     FocusRequest = blip.Key;
             }
+        }
+    }
+
+    /// <summary>
+    /// Beacons, drawn as diamonds so a marked spot never reads as a person. They only appear when the
+    /// zone, the instance and the world all match, for the same reason a friend's blip does: coordinates
+    /// from another copy of the map would point at nothing.
+    /// </summary>
+    private void DrawBeacons(ImDrawListPtr drawList, Vector2 centre, float radius, float yaw)
+    {
+        if (!config.ShowBeacons || beacons.Beacons.Count == 0)
+            return;
+
+        var territory = (ushort)Service.ClientState.TerritoryType;
+        var instance = Service.ClientState.Instance;
+        var world = Service.Objects.LocalPlayer?.CurrentWorld.RowId ?? 0;
+
+        var scale = radius / MathF.Max(10f, config.Radar.RangeYalms);
+        var mouse = ImGui.GetMousePos();
+        var hovered = ImGui.IsWindowHovered();
+        var size = config.Radar.BlipSize * 1.1f;
+
+        foreach (var beacon in beacons.Beacons)
+        {
+            if (!beacon.IsInSameInstance(territory, instance, world))
+                continue;
+
+            var offset = CameraUtil.WorldOffsetToRadar(beacon.Position - selfPosition, yaw) * scale;
+
+            // A beacon off the edge of the scope is left off rather than pinned to the rim: unlike a
+            // person it is not going to move back into range on its own.
+            if (offset.Length() > radius - 6f)
+                continue;
+
+            var point = centre + offset;
+            var tint = UiHelpers.BeaconColor(beacon.Kind);
+            UiHelpers.Diamond(drawList, point, size, UiHelpers.Color(tint with { W = tint.W * config.Radar.Opacity }));
+
+            if (config.Radar.ShowNames)
+            {
+                var textSize = ImGui.CalcTextSize(beacon.Label);
+                drawList.AddText(
+                    point - new Vector2(textSize.X / 2f, textSize.Y + size + 1f),
+                    UiHelpers.Color(tint),
+                    beacon.Label);
+            }
+
+            if (!hovered || Vector2.Distance(mouse, point) > size + 4f)
+                continue;
+
+            using var tooltip = ImRaii.Tooltip();
+            ImGui.TextUnformatted(beacon.Label);
+            UiHelpers.TextMuted($"{UiHelpers.BeaconKindName(beacon.Kind)} from {beacon.SenderName}");
+            UiHelpers.TextMuted(
+                $"{MapMath.FlatDistance(beacon.Position, selfPosition):0.0} yalms away, " +
+                $"{UiHelpers.FormatRemaining(beacon.Remaining)} left");
         }
     }
 

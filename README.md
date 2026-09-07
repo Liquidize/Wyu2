@@ -34,6 +34,10 @@ in, and one line describing what they are actually doing:
 | Housing, Gold Saucer, island | `[HOME] Inside a house`, `[GATE] At the Gold Saucer` |
 | Nothing much | `[IDLE] Idle`, `[MOVE] Travelling` |
 
+**Beacons.** Mark the spot you are standing on, label it, and everybody you share with sees a diamond on
+their radar and their map: a hunt mark, a portal, a FATE, or just "come and look at this". A beacon fades
+on its own timer, and you can take it back before then.
+
 Plus optional in-world name labels above friends you can see on screen, and a server info bar entry
 showing how many contacts are online.
 
@@ -61,8 +65,10 @@ Trading codes both ways links you immediately, since you both clearly agreed.
 - **End-to-end encryption.** Each update is sealed separately for each recipient with a key derived from
   an ECDH P-256 exchange, then AES-256-GCM. The relay stores a nonce and a ciphertext, and can read
   neither.
-- **The relay forgets.** Presence lives in memory with a short TTL and is never written to disk. A relay
-  restart drops every update.
+- **Beacons are deliberate.** Nothing is marked unless you press the button, they go only to the people
+  you already share with, they are sealed under their own key, and stopping sharing withdraws the lot.
+- **The relay forgets.** Presence and beacons live in memory with a short TTL and are never written to
+  disk. A relay restart drops every update and every beacon.
 - **You can leave.** "Delete account" removes your account, your links, and everything parked for you.
 
 Full detail in [docs/PRIVACY.md](docs/PRIVACY.md).
@@ -107,6 +113,7 @@ location; otherwise pass `-p:DalamudLibPath=/path/to/dalamud/dev/` or set `DALAM
 | `/wyu2 config` | Open settings |
 | `/wyu2 share on\|off` | Start or stop sharing |
 | `/wyu2 pause [minutes]` | Pause sharing, 15 minutes by default |
+| `/wyu2 beacon <label>` | Drop a beacon where you are standing |
 | `/wyu2 note <text>` | Set your status note |
 
 ## Running a relay

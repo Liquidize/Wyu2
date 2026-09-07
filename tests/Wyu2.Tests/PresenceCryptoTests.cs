@@ -32,6 +32,20 @@ public class PresenceCryptoTests
         Note = "one more pull",
     };
 
+    private static BeaconPayload SampleBeacon() => new()
+    {
+        CreatedAtUnixMs = 1_700_000_000_000,
+        Kind = BeaconKind.Hunt,
+        Label = "Nunyunuwi up",
+        TerritoryTypeId = 155,
+        MapId = 24,
+        InstanceId = 2,
+        WorldId = 73,
+        X = 12.5f,
+        Y = -3.25f,
+        Z = -88.75f,
+    };
+
     [Fact]
     public void PayloadSurvivesARoundTrip()
     {
@@ -70,6 +84,26 @@ public class PresenceCryptoTests
         var bobToAlice = PresenceCrypto.DeriveKey(bob, alice.ExportPublicKeyBase64(), Bob, Alice);
 
         Assert.NotEqual(aliceToBob, bobToAlice);
+    }
+
+    [Fact]
+    public void ABeaconKeyIsNotThePresenceKeyForTheSamePair()
+    {
+        using var alice = AccountKeyPair.Create();
+        using var bob = AccountKeyPair.Create();
+
+        var presence = PresenceCrypto.DeriveKey(alice, bob.ExportPublicKeyBase64(), Alice, Bob);
+        var beacon = PresenceCrypto.DeriveKey(
+            alice, bob.ExportPublicKeyBase64(), Alice, Bob, ProtocolConstants.BeaconKeyDerivationInfo);
+
+        Assert.NotEqual(presence, beacon);
+
+        // And a beacon sealed under one purpose cannot be opened under the other.
+        var envelope = PresenceCrypto.Seal(beacon, SampleBeacon(), Alice, Bob);
+        Assert.Null(PresenceCrypto.Open<BeaconPayload>(presence, envelope.Nonce, envelope.Ciphertext, Alice, Bob));
+        Assert.Equal(
+            SampleBeacon(),
+            PresenceCrypto.Open<BeaconPayload>(beacon, envelope.Nonce, envelope.Ciphertext, Alice, Bob));
     }
 
     [Fact]

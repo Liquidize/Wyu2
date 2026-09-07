@@ -209,6 +209,22 @@ app.MapDelete("/v1/presence", (HttpContext http, RelayStore store) =>
     return Results.NoContent();
 }).RequireAccount();
 
+// ---------------------------------------------------------------- beacons
+
+app.MapPost("/v1/beacons", (PublishBeaconRequest request, HttpContext http, RelayStore store) =>
+    Results.Ok(store.PublishBeacon(http.Account(), request)))
+    .RequireAccount();
+
+app.MapGet("/v1/beacons", (HttpContext http, RelayStore store) =>
+    Results.Ok(store.FetchBeacons(http.Account())))
+    .RequireAccount();
+
+app.MapDelete("/v1/beacons/{beaconId}", (string beaconId, HttpContext http, RelayStore store) =>
+    store.WithdrawBeacon(http.Account(), beaconId) == StoreResult.Ok
+        ? Results.NoContent()
+        : Fail(400, "invalid_request", "That is not a beacon id this relay would have stored."))
+    .RequireAccount();
+
 app.Run();
 
 static IResult Fail(int status, string code, string message)

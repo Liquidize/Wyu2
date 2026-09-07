@@ -18,8 +18,9 @@ public enum StoreResult
 
 /// <summary>
 /// The whole data layer. Accounts and links live in memory and are snapshotted to a JSON file; presence
-/// blobs live in memory only and expire on their own. A single lock is plenty for the scale this runs at
-/// (a guild, a friend group, a small community), and it keeps the consistency rules easy to check.
+/// blobs and beacons live in memory only and expire on their own. A single lock is plenty for the scale
+/// this runs at (a guild, a friend group, a small community), and it keeps the consistency rules easy to
+/// check.
 /// </summary>
 public sealed class RelayStore
 {
@@ -33,6 +34,12 @@ public sealed class RelayStore
 
     /// <summary>recipient id -> sender id -> blob.</summary>
     private readonly Dictionary<string, Dictionary<string, StoredPresence>> presence = new(StringComparer.Ordinal);
+
+    /// <summary>recipient id -> "sender id|beacon id" -> beacon. Several per sender, unlike presence.</summary>
+    private readonly Dictionary<string, Dictionary<string, StoredBeacon>> beacons = new(StringComparer.Ordinal);
+
+    /// <summary>Longest sender-chosen beacon id the relay will store. A GUID is well inside this.</summary>
+    private const int MaxBeaconIdLength = 64;
 
     private readonly RelayOptions options;
     private readonly ILogger<RelayStore> log;
@@ -178,6 +185,10 @@ public sealed class RelayStore
                 presence.Remove(account.Id);
                 foreach (var bucket in presence.Values)
                     bucket.Remove(account.Id);
+
+                beacons.Remove(account.Id);
+                foreach (var bucket in beacons.Values)
+                    DropBeaconsFromLocked(bucket, account.Id);
             }
 
             if (request.RotateShareCode)
@@ -216,6 +227,10 @@ public sealed class RelayStore
             presence.Remove(account.Id);
             foreach (var bucket in presence.Values)
                 bucket.Remove(account.Id);
+
+            beacons.Remove(account.Id);
+            foreach (var bucket in beacons.Values)
+                DropBeaconsFromLocked(bucket, account.Id);
 
             accountsByTokenHash.Remove(account.TokenHash);
             accountsByShareCode.Remove(ShareCode.Normalize(account.ShareCode)!);
@@ -394,7 +409,10 @@ public sealed class RelayStore
         }
     }
 
-    /// <summary>Unlinks both directions and forgets any presence already parked between the two.</summary>
+    /// <summary>
+    /// Unlinks both directions and forgets anything already parked between the two, presence and beacons
+    /// alike. Somebody you have just unlinked from should not still have a marker of yours on their map.
+    /// </summary>
     public StoreResult RemoveContact(Account account, string contactId)
     {
         lock (sync)
@@ -405,13 +423,37 @@ public sealed class RelayStore
             if (accounts.TryGetValue(contactId, out var other))
                 other.Contacts.Remove(account.Id);
 
-            if (presence.TryGetValue(account.Id, out var inbox))
-                inbox.Remove(contactId);
-            if (presence.TryGetValue(contactId, out var theirInbox))
-                theirInbox.Remove(account.Id);
+            // A shared group can still link the two, and then neither of them has lost sight of the
+            // other, so nothing is dropped.
+            if (!VisibleToLocked(account).Contains(contactId))
+                DropParkedBetweenLocked(account.Id, contactId);
 
             dirty = true;
             return StoreResult.Ok;
+        }
+    }
+
+    /// <summary>Forgets everything parked in either direction between two accounts.</summary>
+    private void DropParkedBetweenLocked(string a, string b)
+    {
+        if (presence.TryGetValue(a, out var ourInbox))
+            ourInbox.Remove(b);
+        if (presence.TryGetValue(b, out var theirInbox))
+            theirInbox.Remove(a);
+
+        if (beacons.TryGetValue(a, out var ourBeacons))
+            DropBeaconsFromLocked(ourBeacons, b);
+        if (beacons.TryGetValue(b, out var theirBeacons))
+            DropBeaconsFromLocked(theirBeacons, a);
+    }
+
+    /// <summary>Removes every beacon one sender has parked in a single inbox.</summary>
+    private static void DropBeaconsFromLocked(Dictionary<string, StoredBeacon> inbox, string senderId)
+    {
+        foreach (var (key, beacon) in inbox.ToList())
+        {
+            if (string.Equals(beacon.SenderAccountId, senderId, StringComparison.Ordinal))
+                inbox.Remove(key);
         }
     }
 
@@ -570,7 +612,7 @@ public sealed class RelayStore
             if (!group.Members.Remove(target))
                 return StoreResult.NotFound;
 
-            DropPresenceBetweenLocked(target, group);
+            DropParkedOnLeavingLocked(target, group);
             HandOverOrDisbandLocked(group, target);
             dirty = true;
             return StoreResult.Ok;
@@ -600,10 +642,11 @@ public sealed class RelayStore
     }
 
     /// <summary>
-    /// Drops presence between somebody leaving a group and the members they can no longer see, unless
-    /// they are still linked some other way.
+    /// Drops whatever is parked between somebody leaving a group and the members they can no longer see,
+    /// unless they are still linked some other way. Beacons go with presence: a marker you dropped for a
+    /// static should not outlive your membership of it.
     /// </summary>
-    private void DropPresenceBetweenLocked(string departedId, Group group)
+    private void DropParkedOnLeavingLocked(string departedId, Group group)
     {
         if (!accounts.TryGetValue(departedId, out var departed))
             return;
@@ -612,14 +655,8 @@ public sealed class RelayStore
 
         foreach (var memberId in group.Members.Keys)
         {
-            if (stillVisible.Contains(memberId))
-                continue;
-
-            if (presence.TryGetValue(memberId, out var theirInbox))
-                theirInbox.Remove(departedId);
-
-            if (presence.TryGetValue(departedId, out var ourInbox))
-                ourInbox.Remove(memberId);
+            if (!stillVisible.Contains(memberId))
+                DropParkedBetweenLocked(departedId, memberId);
         }
     }
 
@@ -776,16 +813,171 @@ public sealed class RelayStore
         }
     }
 
+    // ---------------------------------------------------------------- beacons
+
+    /// <summary>
+    /// Parks a beacon with everybody it is addressed to. The sender's own id for it decides whether this
+    /// replaces one of their existing beacons or adds another, and each sender is held to
+    /// <see cref="ProtocolConstants.MaxBeaconsPerSender"/> per recipient so nobody can paper somebody
+    /// else's map with markers.
+    /// </summary>
+    public PublishBeaconResponse PublishBeacon(Account account, PublishBeaconRequest request)
+    {
+        var now = Now;
+        var beaconId = SanitizeBeaconId(request.BeaconId);
+        if (beaconId is null)
+            return new PublishBeaconResponse { Rejected = request.Envelopes.Count, ServerTimeUnixMs = now };
+
+        var ttl = Math.Clamp(
+            request.TtlSeconds <= 0 ? ProtocolConstants.DefaultBeaconTtlSeconds : request.TtlSeconds,
+            30,
+            ProtocolConstants.MaxBeaconTtlSeconds);
+
+        var expires = now + (ttl * 1000L);
+        var accepted = 0;
+        var rejected = 0;
+
+        lock (sync)
+        {
+            var visible = VisibleToLocked(account);
+
+            foreach (var envelope in request.Envelopes.Take(ProtocolConstants.MaxRecipientsPerPublish))
+            {
+                if (!visible.Contains(envelope.RecipientAccountId) ||
+                    envelope.Ciphertext.Length > ProtocolConstants.MaxEnvelopeBytes ||
+                    envelope.Nonce.Length > 32 ||
+                    string.IsNullOrEmpty(envelope.Ciphertext))
+                {
+                    rejected++;
+                    continue;
+                }
+
+                var inbox = beacons.TryGetValue(envelope.RecipientAccountId, out var existing)
+                    ? existing
+                    : beacons[envelope.RecipientAccountId] = new Dictionary<string, StoredBeacon>(StringComparer.Ordinal);
+
+                inbox[BeaconKey(account.Id, beaconId)] = new StoredBeacon
+                {
+                    BeaconId = beaconId,
+                    SenderAccountId = account.Id,
+                    RecipientAccountId = envelope.RecipientAccountId,
+                    Nonce = envelope.Nonce,
+                    Ciphertext = envelope.Ciphertext,
+                    ReceivedAtUnixMs = now,
+                    ExpiresAtUnixMs = expires,
+                };
+
+                TrimToCapLocked(inbox, account.Id);
+                accepted++;
+            }
+
+            return new PublishBeaconResponse
+            {
+                Accepted = accepted,
+                Rejected = rejected,
+                ServerTimeUnixMs = now,
+            };
+        }
+    }
+
+    /// <summary>Everything currently addressed to this account that has not expired.</summary>
+    public FetchBeaconsResponse FetchBeacons(Account account)
+    {
+        var now = Now;
+        lock (sync)
+        {
+            var response = new FetchBeaconsResponse { ServerTimeUnixMs = now };
+            if (!beacons.TryGetValue(account.Id, out var inbox))
+                return response;
+
+            var visible = VisibleToLocked(account);
+
+            foreach (var (key, beacon) in inbox.ToList())
+            {
+                if (beacon.ExpiresAtUnixMs <= now || !visible.Contains(beacon.SenderAccountId))
+                {
+                    inbox.Remove(key);
+                    continue;
+                }
+
+                accounts.TryGetValue(beacon.SenderAccountId, out var sender);
+                response.Entries.Add(new ReceivedBeacon
+                {
+                    BeaconId = beacon.BeaconId,
+                    SenderAccountId = beacon.SenderAccountId,
+                    SenderDisplayName = sender?.DisplayName ?? "(unknown)",
+                    Nonce = beacon.Nonce,
+                    Ciphertext = beacon.Ciphertext,
+                    ReceivedAtUnixMs = beacon.ReceivedAtUnixMs,
+                    ExpiresAtUnixMs = beacon.ExpiresAtUnixMs,
+                });
+            }
+
+            return response;
+        }
+    }
+
+    /// <summary>
+    /// Takes one of your beacons back from every recipient it reached. Reports success as long as the id
+    /// was well formed, since a beacon that has already expired everywhere is not a failure to withdraw.
+    /// </summary>
+    public StoreResult WithdrawBeacon(Account account, string beaconId)
+    {
+        var id = SanitizeBeaconId(beaconId);
+        if (id is null)
+            return StoreResult.Invalid;
+
+        var key = BeaconKey(account.Id, id);
+        lock (sync)
+        {
+            foreach (var inbox in beacons.Values)
+                inbox.Remove(key);
+
+            return StoreResult.Ok;
+        }
+    }
+
+    private static string BeaconKey(string senderId, string beaconId) => senderId + "|" + beaconId;
+
+    /// <summary>Keeps one sender to their share of an inbox, dropping their oldest beacon first.</summary>
+    private static void TrimToCapLocked(Dictionary<string, StoredBeacon> inbox, string senderId)
+    {
+        while (true)
+        {
+            var mine = inbox
+                .Where(entry => string.Equals(entry.Value.SenderAccountId, senderId, StringComparison.Ordinal))
+                .ToList();
+
+            if (mine.Count <= ProtocolConstants.MaxBeaconsPerSender)
+                return;
+
+            inbox.Remove(mine.OrderBy(entry => entry.Value.ReceivedAtUnixMs).First().Key);
+        }
+    }
+
+    /// <summary>
+    /// Beacon ids are chosen by the client, so they are treated as untrusted text: printable, bounded,
+    /// and free of the separator the inbox keys are built from.
+    /// </summary>
+    private static string? SanitizeBeaconId(string? beaconId)
+    {
+        if (string.IsNullOrWhiteSpace(beaconId) || beaconId.Length > MaxBeaconIdLength)
+            return null;
+
+        return beaconId.Any(c => char.IsControl(c) || c == '|') ? null : beaconId;
+    }
+
     // ---------------------------------------------------------------- maintenance
 
-    /// <summary>Drops expired blobs, stale requests and long dormant accounts.</summary>
-    public (int Blobs, int Requests, int Accounts) Prune()
+    /// <summary>Drops expired blobs and beacons, stale requests and long dormant accounts.</summary>
+    public (int Blobs, int Beacons, int Requests, int Accounts) Prune()
     {
         var now = Now;
         var blobCutoff = now;
         var requestCutoff = now - (options.ContactRequestRetentionDays * 86_400_000L);
         var accountCutoff = now - (options.AccountRetentionDays * 86_400_000L);
         var droppedBlobs = 0;
+        var droppedBeacons = 0;
         var droppedRequests = 0;
         var droppedAccounts = 0;
 
@@ -799,6 +991,18 @@ public sealed class RelayStore
                     {
                         inbox.Remove(sender);
                         droppedBlobs++;
+                    }
+                }
+            }
+
+            foreach (var (_, inbox) in beacons)
+            {
+                foreach (var (key, beacon) in inbox.ToList())
+                {
+                    if (beacon.ExpiresAtUnixMs <= blobCutoff)
+                    {
+                        inbox.Remove(key);
+                        droppedBeacons++;
                     }
                 }
             }
@@ -822,7 +1026,7 @@ public sealed class RelayStore
         if (droppedRequests > 0 || droppedAccounts > 0)
             dirty = true;
 
-        return (droppedBlobs, droppedRequests, droppedAccounts);
+        return (droppedBlobs, droppedBeacons, droppedRequests, droppedAccounts);
     }
 
     private void DeleteAccountLocked(Account account)
@@ -846,6 +1050,10 @@ public sealed class RelayStore
         foreach (var bucket in presence.Values)
             bucket.Remove(account.Id);
 
+        beacons.Remove(account.Id);
+        foreach (var bucket in beacons.Values)
+            DropBeaconsFromLocked(bucket, account.Id);
+
         accountsByTokenHash.Remove(account.TokenHash);
         accountsByShareCode.Remove(ShareCode.Normalize(account.ShareCode)!);
         accounts.Remove(account.Id);
@@ -863,7 +1071,10 @@ public sealed class RelayStore
 
     // ---------------------------------------------------------------- persistence
 
-    /// <summary>Writes the account graph to disk if anything changed. Presence is deliberately excluded.</summary>
+    /// <summary>
+    /// Writes the account graph to disk if anything changed. Presence and beacons are deliberately
+    /// excluded: neither outlives the process that is holding them.
+    /// </summary>
     public void Save(bool force = false)
     {
         RelaySnapshot snapshot;

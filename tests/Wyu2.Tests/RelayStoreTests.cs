@@ -300,7 +300,7 @@ public class RelayStoreTests : IDisposable
         store.RequestContact(carol, new CreateContactRequest { ShareCode = alice.ShareCode });
 
         clock.Advance(TimeSpan.FromDays(options.ContactRequestRetentionDays + 1));
-        var (blobs, requests, accounts) = store.Prune();
+        var (blobs, _, requests, accounts) = store.Prune();
 
         Assert.Equal(1, blobs);
         Assert.Equal(1, requests);
@@ -317,7 +317,7 @@ public class RelayStoreTests : IDisposable
         // Bob checks in, so only Alice ages out.
         Assert.NotNull(store.Authenticate(BobToken(bob), null));
 
-        var (_, _, accounts) = store.Prune();
+        var (_, _, _, accounts) = store.Prune();
 
         Assert.Equal(1, accounts);
         Assert.Equal(1, store.AccountCount);

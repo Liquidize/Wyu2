@@ -21,6 +21,10 @@ and the relay, so they cannot drift.
 | Maximum envelope size | 8 KiB |
 | Maximum recipients per publish | 200 |
 | Maximum display name | 48 characters |
+| Default beacon TTL | 900 s |
+| Maximum beacon TTL | 3 h |
+| Beacons per sender, per recipient | 8 |
+| Maximum beacon label | 60 characters |
 | Maximum group name | 40 characters |
 | Members per group | 64 |
 | Groups per account | 16 |
@@ -116,6 +120,37 @@ than returned.
 ### `DELETE /v1/presence`
 Clears every blob you published, everywhere. This is what the plugin's stop-sharing switch calls.
 
+### `POST /v1/beacons`
+Body `PublishBeaconRequest { beaconId, ttlSeconds, envelopes: [ { recipientAccountId, nonce, ciphertext } ] }`.
+
+`beaconId` is chosen by the sender and only has to be unique among that sender's own beacons; the relay
+files each one under the account that sent it. Publishing an id again replaces that beacon everywhere it
+was sent, which is how a beacon is moved or relabelled.
+
+Unlike presence, a sender may have several beacons parked with one recipient at a time. Once a sender is
+holding more than eight in the same inbox, their oldest is dropped to make room. Envelopes addressed to
+anybody the sender is not linked with are rejected exactly as they are for presence, as are oversized
+ones and blank or unusable beacon ids.
+
+The TTL is clamped to between 30 seconds and 3 hours.
+
+Returns `{ accepted, rejected, serverTimeUnixMs }`.
+
+### `GET /v1/beacons`
+Returns `{ entries: [ ReceivedBeacon ], serverTimeUnixMs }` — every unexpired beacon addressed to you,
+each with the `beaconId` its sender gave it. Expired beacons, and beacons from accounts you have since
+unlinked from, are dropped rather than returned. Your own beacons never come back here: the relay only
+holds what somebody addressed to somebody else, so a client keeps its own until they expire.
+
+### `DELETE /v1/beacons/{beaconId}`
+Withdraws that beacon of yours from every recipient it reached. Only your own beacons can be withdrawn,
+since the id is looked up under the calling account. Withdrawing a beacon that has already expired
+everywhere succeeds; a beacon id the relay would never have stored returns `400 invalid_request`.
+
+Beacons live in memory only, like presence: a relay restart takes every beacon with it, and none of them
+are ever written to disk. Deleting an account, unlinking a contact, leaving a group and rotating a public
+key all drop beacons on the same terms as presence.
+
 ## Envelope format
 
 ```
@@ -130,6 +165,9 @@ aad        = "1|<senderAccountId>|<recipientAccountId>"
 
 The info string and the associated data both bind the direction, so a blob cannot be replayed at another
 recipient or reflected back at its author.
+
+Beacons use the same construction with their own info string, `"Wyu2/v1/beacon|<sender>|<recipient>"`, so
+the key that opens a presence blob cannot open a beacon between the same pair, or the other way round.
 
 ## Payload
 
@@ -154,11 +192,29 @@ allow it:
 `act` is `ActivityKind`; `f` is the `PresenceFlags` bit set (in combat, mounted, flying, cutscene, party,
 queue, bound by duty, AFK, busy, dead, sanctuary).
 
+A beacon's plaintext is a `BeaconPayload`: one labelled point, with nothing optional about it, since the
+sender chose to send exactly this.
+
+```json
+{
+  "v": 1,
+  "t": 1767225600000,
+  "kind": 2,
+  "label": "Nunyunuwi up",
+  "tt": 155, "map": 24, "inst": 2, "w": 73,
+  "x": 12.5, "y": -3.25, "z": -88.75
+}
+```
+
+`kind` is `BeaconKind`: marker, rally, hunt, FATE, treasure, danger, node. The world is carried so a
+beacon dropped on another world is never plotted as if it were local.
+
 ## Client behaviour
 
 - Publish every 10 seconds by default, with a TTL of six intervals so a missed publish does not blink
   anybody offline.
 - Fetch every 10 seconds.
+- Fetch beacons at half that rate: they change far less often than a position does.
 - Refresh contacts every 60 seconds.
 - Treat a blob that fails to decrypt as a dropped update, not an error: it usually means the sender
   rotated their key and the contact list has not caught up yet.

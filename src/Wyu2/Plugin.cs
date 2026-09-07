@@ -22,6 +22,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly RelayClient client;
     private readonly RelaySession session;
     private readonly PresenceHub hub;
+    private readonly BeaconService beacons;
     private readonly NearbyScanner scanner;
     private readonly WindowSystem windows = new("Wyu2");
     private readonly MainWindow mainWindow;
@@ -53,12 +54,14 @@ public sealed class Plugin : IDalamudPlugin
         var activity = new ActivityResolver(data);
         var snapshots = new SelfSnapshotBuilder(config, data, activity);
         hub = new PresenceHub(config, client, session, snapshots, scanner, data);
+        beacons = new BeaconService(config, client, session, data);
 
-        mapWindow = new ZoneMapWindow(config, hub, data);
-        radarWindow = new RadarWindow(config, hub, scanner);
+        mapWindow = new ZoneMapWindow(config, hub, beacons, data);
+        radarWindow = new RadarWindow(config, hub, beacons, scanner);
         configWindow = new ConfigWindow(config, hub, data);
         mainWindow = new MainWindow(
-            config, hub, session, client, mapWindow, aetherytes, teleporter, () => configWindow.IsOpen = true);
+            config, hub, beacons, session, client, mapWindow, aetherytes, teleporter,
+            () => configWindow.IsOpen = true);
         overlay = new WorldOverlay(config, hub);
 
         windows.AddWindow(mainWindow);
@@ -76,7 +79,8 @@ public sealed class Plugin : IDalamudPlugin
         Service.Commands.AddHandler(MainCommand, new CommandInfo(OnCommand)
         {
             HelpMessage =
-                "Open the friend list. Subcommands: radar, map, config, share on|off, pause [minutes], note <text>.",
+                "Open the friend list. Subcommands: radar, map, config, share on|off, pause [minutes], " +
+                "beacon <label>, note <text>.",
         });
 
         Service.Commands.AddHandler(ShortCommand, new CommandInfo(OnCommand)
@@ -114,6 +118,7 @@ public sealed class Plugin : IDalamudPlugin
         windows.RemoveAllWindows();
 
         hub.Dispose();
+        beacons.Dispose();
         session.Dispose();
         client.Dispose();
     }
@@ -123,6 +128,7 @@ public sealed class Plugin : IDalamudPlugin
         try
         {
             hub.Update();
+            beacons.Update();
             alerts.Evaluate(hub.Friends);
             UpdateDtr();
             HandleRadarFocus();
@@ -208,6 +214,10 @@ public sealed class Plugin : IDalamudPlugin
                 Pause(rest);
                 break;
 
+            case "beacon" or "mark":
+                DropBeacon(rest);
+                break;
+
             case "note":
                 config.StatusNote = rest;
                 config.Save();
@@ -217,7 +227,8 @@ public sealed class Plugin : IDalamudPlugin
 
             default:
                 Service.Chat.PrintError(
-                    $"Unknown subcommand \"{verb}\". Try: radar, map, config, share on|off, pause [minutes], note <text>.",
+                    $"Unknown subcommand \"{verb}\". Try: radar, map, config, share on|off, pause [minutes], " +
+                    "beacon <label>, note <text>.",
                     "Wyu2");
                 break;
         }
@@ -237,11 +248,36 @@ public sealed class Plugin : IDalamudPlugin
         config.Save();
 
         if (enable)
+        {
             hub.PublishNow();
+        }
         else
+        {
             hub.PanicStop();
 
+            // A beacon left standing after you switched off would still be pointing at where you were.
+            beacons.WithdrawAll();
+        }
+
         Service.Chat.Print(enable ? "Sharing your presence." : "Stopped sharing.", "Wyu2");
+    }
+
+    /// <summary>
+    /// Drops a beacon from chat, which is how somebody calling a hunt train actually wants to do it: they
+    /// are already typing. The kind is whichever one they last picked in the window.
+    /// </summary>
+    private void DropBeacon(string label)
+    {
+        var problem = beacons.Drop(config.LastBeaconKind, label);
+        if (problem is not null)
+        {
+            Service.Chat.PrintError(problem, "Wyu2");
+            return;
+        }
+
+        Service.Chat.Print(
+            string.IsNullOrWhiteSpace(label) ? "Beacon dropped here." : $"Beacon dropped: \"{label.Trim()}\".",
+            "Wyu2");
     }
 
     private void Pause(string argument)

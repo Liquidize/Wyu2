@@ -16,6 +16,7 @@ public sealed class MainWindow : Window
 {
     private readonly Configuration.Configuration config;
     private readonly PresenceHub hub;
+    private readonly BeaconService beacons;
     private readonly RelaySession session;
     private readonly RelayClient client;
     private readonly ZoneMapWindow mapWindow;
@@ -23,6 +24,7 @@ public sealed class MainWindow : Window
     private readonly TeleporterIpc teleporter;
     private readonly Action openConfig;
 
+    private string beaconLabelInput = string.Empty;
     private string shareCodeInput = string.Empty;
     private string groupNameInput = string.Empty;
     private string groupCodeInput = string.Empty;
@@ -36,6 +38,7 @@ public sealed class MainWindow : Window
     public MainWindow(
         Configuration.Configuration config,
         PresenceHub hub,
+        BeaconService beacons,
         RelaySession session,
         RelayClient client,
         ZoneMapWindow mapWindow,
@@ -46,6 +49,7 @@ public sealed class MainWindow : Window
     {
         this.config = config;
         this.hub = hub;
+        this.beacons = beacons;
         this.session = session;
         this.client = client;
         this.mapWindow = mapWindow;
@@ -78,6 +82,12 @@ public sealed class MainWindow : Window
         {
             if (tab.Success)
                 DrawFriends();
+        }
+
+        using (var tab = ImRaii.TabItem(beacons.Beacons.Count > 0 ? $"Beacons ({beacons.Beacons.Count})" : "Beacons"))
+        {
+            if (tab.Success)
+                DrawBeacons();
         }
 
         using (var tab = ImRaii.TabItem(session.Requests.Count > 0 ? $"Contacts ({session.Requests.Count})" : "Contacts"))
@@ -124,9 +134,14 @@ public sealed class MainWindow : Window
             config.PausedUntilUnixMs = 0;
             config.Save();
             if (config.SharingEnabled)
+            {
                 hub.PublishNow();
+            }
             else
+            {
                 hub.PanicStop();
+                beacons.WithdrawAll();
+            }
         }
 
         ImGui.SameLine();
@@ -424,6 +439,142 @@ public sealed class MainWindow : Window
 
         settings.Alerts = enabled ? settings.Alerts | trigger : settings.Alerts & ~trigger;
         config.Save();
+    }
+
+    // ---------------------------------------------------------------- beacons
+
+    private void DrawBeacons()
+    {
+        ImGui.Spacing();
+        ImGui.TextWrapped(
+            "A beacon marks the spot you are standing on and sends it to everybody you share with. Use it " +
+            "for a hunt mark, a portal, a FATE, or just \"come and look at this\". It fades on its own.");
+
+        ImGui.Spacing();
+        ImGui.SetNextItemWidth(240f);
+        ImGui.InputTextWithHint("##beaconlabel", "what is here?", ref beaconLabelInput,
+            ProtocolConstants.MaxBeaconLabelLength);
+
+        ImGui.SameLine();
+        ImGui.SetNextItemWidth(150f);
+        DrawBeaconKindSelector();
+
+        ImGui.SameLine();
+        var blocked = beacons.DropBlockedReason();
+        using (ImRaii.Disabled(blocked is not null))
+        {
+            if (ImGui.Button("Drop here"))
+            {
+                statusMessage = beacons.Drop(config.LastBeaconKind, beaconLabelInput) ?? string.Empty;
+                if (statusMessage.Length == 0)
+                    beaconLabelInput = string.Empty;
+            }
+        }
+
+        // The button is disabled in exactly the case the tooltip explains, so it has to answer while
+        // disabled or the explanation is never seen.
+        if (blocked is not null && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(blocked);
+
+        ImGui.SetNextItemWidth(240f);
+        if (UiHelpers.SliderInt("Stays up for", () => config.BeaconMinutes, v => config.BeaconMinutes = v,
+                1, ProtocolConstants.MaxBeaconTtlSeconds / 60, "%d minutes"))
+        {
+            config.Save();
+        }
+
+        UiHelpers.HelpMarker(
+            "How long a beacon you drop lives on the relay. Existing beacons keep the time they were given.");
+
+        if (beacons.MineCount > 0)
+        {
+            UiHelpers.TextMuted(
+                $"You have {beacons.MineCount} of {ProtocolConstants.MaxBeaconsPerSender} beacons out. " +
+                "Dropping more than that quietly retires your oldest.");
+        }
+
+        DrawStatusMessage();
+        ImGui.Separator();
+
+        if (beacons.Beacons.Count == 0)
+        {
+            UiHelpers.TextMuted("No beacons are up. Drop one, or wait for somebody to mark something.");
+            return;
+        }
+
+        DrawBeaconTable();
+    }
+
+    private void DrawBeaconKindSelector()
+    {
+        using var combo = ImRaii.Combo("##beaconkind", UiHelpers.BeaconKindName(config.LastBeaconKind));
+        if (!combo.Success)
+            return;
+
+        foreach (var kind in UiHelpers.BeaconKinds)
+        {
+            if (!ImGui.Selectable(UiHelpers.BeaconKindName(kind), kind == config.LastBeaconKind))
+                continue;
+
+            config.LastBeaconKind = kind;
+            config.Save();
+        }
+    }
+
+    private void DrawBeaconTable()
+    {
+        using var table = ImRaii.Table("##beacons", 5,
+            ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerH | ImGuiTableFlags.ScrollY);
+
+        if (!table.Success)
+            return;
+
+        ImGui.TableSetupColumn("Beacon", ImGuiTableColumnFlags.WidthStretch, 1.3f);
+        ImGui.TableSetupColumn("Dropped by", ImGuiTableColumnFlags.WidthStretch, 0.8f);
+        ImGui.TableSetupColumn("Where", ImGuiTableColumnFlags.WidthStretch, 1.4f);
+        ImGui.TableSetupColumn("Fades in", ImGuiTableColumnFlags.WidthFixed, 70f);
+        ImGui.TableSetupColumn(string.Empty, ImGuiTableColumnFlags.WidthFixed, 80f);
+        ImGui.TableSetupScrollFreeze(0, 1);
+        ImGui.TableHeadersRow();
+
+        foreach (var beacon in beacons.Beacons)
+        {
+            using var id = ImRaii.PushId(beacon.Key);
+            ImGui.TableNextRow();
+
+            ImGui.TableNextColumn();
+            UiHelpers.StatusDot(UiHelpers.BeaconColor(beacon.Kind), UiHelpers.BeaconKindName(beacon.Kind));
+            ImGui.SameLine();
+            ImGui.TextUnformatted(beacon.Label);
+
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(beacon.SenderName);
+
+            ImGui.TableNextColumn();
+            var zone = string.IsNullOrWhiteSpace(beacon.ZoneName) ? "Unknown zone" : beacon.ZoneName;
+            var coordinates = beacon.MapCoordinates is { } c ? $" {MapCoordinateText(c)}" : string.Empty;
+            ImGui.TextUnformatted($"{zone}{coordinates}");
+
+            ImGui.TableNextColumn();
+            UiHelpers.TextMuted(UiHelpers.FormatRemaining(beacon.Remaining));
+
+            ImGui.TableNextColumn();
+            if (ImGui.SmallButton("Map"))
+                mapWindow.FocusOn(beacon);
+
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("Show this beacon's zone on the friend map.");
+
+            if (!beacon.IsMine)
+                continue;
+
+            ImGui.SameLine();
+            if (ImGui.SmallButton("Withdraw"))
+                beacons.Withdraw(beacon.BeaconId);
+
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("Take this beacon back from everybody it was sent to.");
+        }
     }
 
     // ---------------------------------------------------------------- contacts

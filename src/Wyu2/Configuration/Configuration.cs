@@ -1,5 +1,6 @@
 using System.Numerics;
 using Dalamud.Configuration;
+using Wyu2.Protocol;
 
 namespace Wyu2.Configuration;
 
@@ -207,6 +208,21 @@ public sealed class Configuration : IPluginConfiguration
     public bool AnimateMapMarkers { get; set; } = true;
     public bool OverlayShowActivity { get; set; } = true;
     public float OverlayMaxDistance { get; set; } = 200f;
+
+    // ------------------------------------------------------------------ beacons
+
+    /// <summary>Draw beacons on the radar and the zone map.</summary>
+    public bool ShowBeacons { get; set; } = true;
+
+    /// <summary>Say so in the chat log when somebody drops a beacon for you.</summary>
+    public bool AnnounceBeaconsInChat { get; set; } = true;
+
+    /// <summary>How long a beacon you drop stays up, in minutes. Clamped to what the protocol allows.</summary>
+    public int BeaconMinutes { get; set; } = 15;
+
+    /// <summary>The kind offered first the next time you drop one, so a hunt train is one click.</summary>
+    public BeaconKind LastBeaconKind { get; set; } = BeaconKind.Marker;
+
     // ------------------------------------------------------------------ alerts
 
     /// <summary>Master switch for contact alerts. Individual triggers are per contact.</summary>

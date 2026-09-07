@@ -17,6 +17,7 @@ public sealed class ZoneMapWindow : Window
 {
     private readonly Configuration.Configuration config;
     private readonly PresenceHub hub;
+    private readonly BeaconService beacons;
     private readonly GameDataCache data;
 
     /// <summary>Seconds between marker pings.</summary>
@@ -28,11 +29,13 @@ public sealed class ZoneMapWindow : Window
     private float zoom = 1f;
     private Vector2 pan = Vector2.Zero;
 
-    public ZoneMapWindow(Configuration.Configuration config, PresenceHub hub, GameDataCache data)
+    public ZoneMapWindow(
+        Configuration.Configuration config, PresenceHub hub, BeaconService beacons, GameDataCache data)
         : base("Wyu2 map##wyu2-map")
     {
         this.config = config;
         this.hub = hub;
+        this.beacons = beacons;
         this.data = data;
 
         Size = new Vector2(560f, 620f);
@@ -58,6 +61,21 @@ public sealed class ZoneMapWindow : Window
         followSelf = false;
         selectedTerritory = territory;
         selectedMapId = friend.MapId != 0 ? friend.MapId : data.GetMapForTerritory(territory)?.RowId ?? 0;
+        pan = Vector2.Zero;
+        zoom = 1f;
+        IsOpen = true;
+    }
+
+    /// <summary>Points the map at the zone a beacon was dropped in.</summary>
+    public void FocusOn(LiveBeacon beacon)
+    {
+        var territory = beacon.Payload.TerritoryTypeId;
+        if (territory == 0)
+            return;
+
+        followSelf = false;
+        selectedTerritory = territory;
+        selectedMapId = beacon.MapId != 0 ? beacon.MapId : data.GetMapForTerritory(territory)?.RowId ?? 0;
         pan = Vector2.Zero;
         zoom = 1f;
         IsOpen = true;
@@ -267,8 +285,74 @@ public sealed class ZoneMapWindow : Window
             }
         }
 
+        DrawBeacons(drawList, map, origin, side, uvMin, span, hovered);
         DrawSelfMarker(drawList, map, origin, side, uvMin, span);
         drawList.PopClipRect();
+    }
+
+    /// <summary>
+    /// Beacons in the zone being looked at, as diamonds rather than the round markers people get. The
+    /// world always has to match, since a beacon on another world is somewhere you cannot walk to; the
+    /// instance is only compared while you are actually standing in this zone, because a zone you picked
+    /// from the list has no instance of its own to compare against.
+    /// </summary>
+    private void DrawBeacons(
+        ImDrawListPtr drawList, Map map, Vector2 origin, float side, Vector2 uvMin, Vector2 span, bool hovered)
+    {
+        if (!config.ShowBeacons || beacons.Beacons.Count == 0)
+            return;
+
+        var here = Service.ClientState.TerritoryType == selectedTerritory;
+        var instance = Service.ClientState.Instance;
+        var world = Service.Objects.LocalPlayer?.CurrentWorld.RowId ?? 0;
+        var mouse = ImGui.GetMousePos();
+
+        foreach (var beacon in beacons.Beacons)
+        {
+            var payload = beacon.Payload;
+            if (payload.TerritoryTypeId != selectedTerritory)
+                continue;
+
+            if (payload.WorldId != 0 && world != 0 && payload.WorldId != world)
+                continue;
+
+            if (here && payload.InstanceId != instance)
+                continue;
+
+            var uv = MapMath.WorldToTextureUv(beacon.Position, map);
+            var point = origin + (((uv - uvMin) / span) * side);
+            if (point.X < origin.X || point.Y < origin.Y || point.X > origin.X + side || point.Y > origin.Y + side)
+                continue;
+
+            var tint = UiHelpers.BeaconColor(beacon.Kind);
+            UiHelpers.Diamond(drawList, point, 7f, UiHelpers.Color(tint));
+
+            var size = ImGui.CalcTextSize(beacon.Label);
+            drawList.AddText(point - new Vector2(size.X / 2f, size.Y + 9f), UiHelpers.Color(tint), beacon.Label);
+
+            if (!hovered || Vector2.Distance(mouse, point) > 10f)
+                continue;
+
+            using (var tooltip = ImRaii.Tooltip())
+            {
+                ImGui.TextUnformatted(beacon.Label);
+                UiHelpers.TextMuted($"{UiHelpers.BeaconKindName(beacon.Kind)} from {beacon.SenderName}");
+                if (beacon.MapCoordinates is { } coordinates)
+                    UiHelpers.TextMuted(MapMath.FormatCoordinates(coordinates));
+                UiHelpers.TextMuted($"Fades in {UiHelpers.FormatRemaining(beacon.Remaining)}");
+                UiHelpers.TextMuted("Click to open the in-game map here.");
+            }
+
+            if (ImGui.IsMouseClicked(ImGuiMouseButton.Left))
+            {
+                Service.GameGui.OpenMapWithMapLink(
+                    new Dalamud.Game.Text.SeStringHandling.Payloads.MapLinkPayload(
+                        payload.TerritoryTypeId,
+                        map.RowId,
+                        beacon.MapCoordinates?.X ?? 0f,
+                        beacon.MapCoordinates?.Y ?? 0f));
+            }
+        }
     }
 
     /// <summary>

@@ -191,6 +191,17 @@ public sealed class RelayClient : IDisposable
     public Task<bool> ClearPresenceAsync(CancellationToken token = default)
         => SendVoidAsync(HttpMethod.Delete, "v1/presence", null, token);
 
+    public Task<PublishBeaconResponse?> PublishBeaconAsync(
+        PublishBeaconRequest request, CancellationToken token = default)
+        => SendAsync<PublishBeaconResponse>(HttpMethod.Post, "v1/beacons", request, requireAuth: true, token);
+
+    public Task<FetchBeaconsResponse?> FetchBeaconsAsync(CancellationToken token = default)
+        => SendAsync<FetchBeaconsResponse>(HttpMethod.Get, "v1/beacons", null, requireAuth: true, token);
+
+    /// <summary>Takes one of our beacons back from everybody it was sent to.</summary>
+    public Task<bool> WithdrawBeaconAsync(string beaconId, CancellationToken token = default)
+        => SendVoidAsync(HttpMethod.Delete, $"v1/beacons/{Uri.EscapeDataString(beaconId)}", null, token);
+
     // ---------------------------------------------------------------- plumbing
 
     private async Task<T?> SendAsync<T>(

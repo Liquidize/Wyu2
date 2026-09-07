@@ -45,6 +45,26 @@ public sealed class StoredPresence
     public long ExpiresAtUnixMs { get; init; }
 }
 
+/// <summary>
+/// A labelled point one account dropped for another. Held in memory only, like presence: a relay restart
+/// takes every beacon with it, and none of them are ever written to disk.
+///
+/// Unlike presence, a sender may have several of these parked with the same recipient at once, which is
+/// why each one carries the sender's own id for it.
+/// </summary>
+public sealed class StoredBeacon
+{
+    /// <summary>Sender-chosen id, unique within that sender's beacons.</summary>
+    public required string BeaconId { get; init; }
+
+    public required string SenderAccountId { get; init; }
+    public required string RecipientAccountId { get; init; }
+    public required string Nonce { get; init; }
+    public required string Ciphertext { get; init; }
+    public long ReceivedAtUnixMs { get; init; }
+    public long ExpiresAtUnixMs { get; init; }
+}
+
 /// <summary>A named set of accounts who can all see each other.</summary>
 public sealed class Group
 {

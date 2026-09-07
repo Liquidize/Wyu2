@@ -55,7 +55,58 @@ public static class UiHelpers
         _ => "----",
     };
 
+    /// <summary>Colour for a beacon, so its purpose reads off the radar without a label.</summary>
+    public static Vector4 BeaconColor(BeaconKind kind) => kind switch
+    {
+        BeaconKind.Rally => new Vector4(0.45f, 0.88f, 0.62f, 1f),
+        BeaconKind.Hunt => new Vector4(0.98f, 0.48f, 0.42f, 1f),
+        BeaconKind.Fate => new Vector4(0.62f, 0.72f, 0.99f, 1f),
+        BeaconKind.Treasure => new Vector4(0.98f, 0.82f, 0.38f, 1f),
+        BeaconKind.Danger => new Vector4(0.98f, 0.40f, 0.70f, 1f),
+        BeaconKind.Node => new Vector4(0.70f, 0.86f, 0.50f, 1f),
+        _ => new Vector4(0.86f, 0.88f, 0.92f, 1f),
+    };
+
+    /// <summary>What a beacon kind is called in the UI.</summary>
+    public static string BeaconKindName(BeaconKind kind) => kind switch
+    {
+        BeaconKind.Rally => "Meet here",
+        BeaconKind.Hunt => "Hunt mark",
+        BeaconKind.Fate => "FATE",
+        BeaconKind.Treasure => "Treasure",
+        BeaconKind.Danger => "Danger",
+        BeaconKind.Node => "Gathering node",
+        _ => "Marker",
+    };
+
+    /// <summary>Every beacon kind, in the order the drop menu offers them.</summary>
+    public static readonly BeaconKind[] BeaconKinds =
+    [
+        BeaconKind.Marker,
+        BeaconKind.Rally,
+        BeaconKind.Hunt,
+        BeaconKind.Fate,
+        BeaconKind.Treasure,
+        BeaconKind.Danger,
+        BeaconKind.Node,
+    ];
+
     public static uint Color(Vector4 color) => ImGui.GetColorU32(color);
+
+    /// <summary>
+    /// A beacon's marker: a diamond, so it is never mistaken for the round blip of a person, with a dark
+    /// outline that keeps it legible over a bright patch of map.
+    /// </summary>
+    public static void Diamond(ImDrawListPtr drawList, Vector2 centre, float radius, uint fill)
+    {
+        var top = centre with { Y = centre.Y - radius };
+        var right = centre with { X = centre.X + radius };
+        var bottom = centre with { Y = centre.Y + radius };
+        var left = centre with { X = centre.X - radius };
+
+        drawList.AddQuadFilled(top, right, bottom, left, fill);
+        drawList.AddQuad(top, right, bottom, left, Color(new Vector4(0f, 0f, 0f, 0.8f)), 1.5f);
+    }
 
     /// <summary>Fades a colour towards grey as an update gets older.</summary>
     public static Vector4 Fade(Vector4 color, float amount)
@@ -78,6 +129,19 @@ public static class UiHelpers
             < 3600 => $"{(int)(seconds / 60)}m ago",
             < 86400 => $"{(int)(seconds / 3600)}h ago",
             _ => $"{(int)(seconds / 86400)}d ago",
+        };
+    }
+
+    /// <summary>How much longer something has to live, phrased the way a player would say it.</summary>
+    public static string FormatRemaining(TimeSpan remaining)
+    {
+        var seconds = remaining.TotalSeconds;
+        return seconds switch
+        {
+            <= 0 => "0s",
+            < 60 => $"{(int)seconds}s",
+            < 3600 => $"{(int)(seconds / 60)}m",
+            _ => $"{(int)(seconds / 3600)}h {(int)(seconds % 3600 / 60)}m",
         };
     }
 

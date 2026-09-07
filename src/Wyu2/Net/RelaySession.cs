@@ -14,6 +14,8 @@ public sealed class RelaySession : IDisposable
     private readonly RelayClient client;
     private readonly ConcurrentDictionary<string, byte[]> outboundKeys = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, byte[]> inboundKeys = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, byte[]> outboundBeaconKeys = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, byte[]> inboundBeaconKeys = new(StringComparer.Ordinal);
     private AccountKeyPair? keys;
 
     public RelaySession(Configuration.Configuration config, RelayClient client)
@@ -43,6 +45,8 @@ public sealed class RelaySession : IDisposable
         keys = null;
         outboundKeys.Clear();
         inboundKeys.Clear();
+        outboundBeaconKeys.Clear();
+        inboundBeaconKeys.Clear();
 
         if (string.IsNullOrEmpty(config.PrivateKey))
             return;
@@ -272,20 +276,36 @@ public sealed class RelaySession : IDisposable
         return dirty;
     }
 
-    /// <summary>Key used to encrypt payloads we send to a contact.</summary>
+    /// <summary>Key used to encrypt presence we send to a contact.</summary>
     public byte[]? GetOutboundKey(string contactAccountId, string contactPublicKey)
-        => GetKey(outboundKeys, contactAccountId, contactPublicKey, config.AccountId, contactAccountId);
+        => GetKey(outboundKeys, contactAccountId, contactPublicKey, config.AccountId, contactAccountId,
+            ProtocolConstants.KeyDerivationInfo);
 
-    /// <summary>Key used to decrypt payloads a contact sent us.</summary>
+    /// <summary>Key used to decrypt presence a contact sent us.</summary>
     public byte[]? GetInboundKey(string contactAccountId, string contactPublicKey)
-        => GetKey(inboundKeys, contactAccountId, contactPublicKey, contactAccountId, config.AccountId);
+        => GetKey(inboundKeys, contactAccountId, contactPublicKey, contactAccountId, config.AccountId,
+            ProtocolConstants.KeyDerivationInfo);
+
+    /// <summary>
+    /// Key used to encrypt beacons we send to a contact. Beacons derive from the same shared secret as
+    /// presence but under their own purpose, so neither kind of message can be passed off as the other.
+    /// </summary>
+    public byte[]? GetOutboundBeaconKey(string contactAccountId, string contactPublicKey)
+        => GetKey(outboundBeaconKeys, contactAccountId, contactPublicKey, config.AccountId, contactAccountId,
+            ProtocolConstants.BeaconKeyDerivationInfo);
+
+    /// <summary>Key used to decrypt beacons a contact dropped for us.</summary>
+    public byte[]? GetInboundBeaconKey(string contactAccountId, string contactPublicKey)
+        => GetKey(inboundBeaconKeys, contactAccountId, contactPublicKey, contactAccountId, config.AccountId,
+            ProtocolConstants.BeaconKeyDerivationInfo);
 
     private byte[]? GetKey(
         ConcurrentDictionary<string, byte[]> cache,
         string contactAccountId,
         string contactPublicKey,
         string senderId,
-        string recipientId)
+        string recipientId,
+        string purpose)
     {
         if (keys is null || string.IsNullOrEmpty(contactPublicKey) || string.IsNullOrEmpty(config.AccountId))
             return null;
@@ -297,7 +317,7 @@ public sealed class RelaySession : IDisposable
 
         try
         {
-            var derived = PresenceCrypto.DeriveKey(keys, contactPublicKey, senderId, recipientId);
+            var derived = PresenceCrypto.DeriveKey(keys, contactPublicKey, senderId, recipientId, purpose);
             cache[cacheKey] = derived;
             return derived;
         }

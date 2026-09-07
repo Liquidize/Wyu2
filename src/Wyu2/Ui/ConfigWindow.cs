@@ -345,6 +345,22 @@ public sealed class ConfigWindow : Window
         }
 
         ImGui.Separator();
+        ImGui.TextUnformatted("Beacons");
+
+        if (UiHelpers.Checkbox("Draw beacons on the radar and map", () => config.ShowBeacons,
+                v => config.ShowBeacons = v,
+                "Marked spots your contacts dropped, and the ones you dropped yourself."))
+        {
+            config.Save();
+        }
+
+        if (UiHelpers.Checkbox("Say so in chat when one arrives", () => config.AnnounceBeaconsInChat,
+                v => config.AnnounceBeaconsInChat = v))
+        {
+            config.Save();
+        }
+
+        ImGui.Separator();
         ImGui.TextUnformatted("Alerts");
         UiHelpers.HelpMarker(
             "Which contacts you hear about is set per contact: right click somebody in the friend list. " +
