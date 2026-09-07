@@ -26,6 +26,12 @@ public sealed record RegisterRequest
     /// <summary>Base64 SubjectPublicKeyInfo of the account's ECDH P-256 public key.</summary>
     public string PublicKey { get; init; } = string.Empty;
 
+    /// <summary>
+    /// Base64 SubjectPublicKeyInfo of the account's long-term ECDSA signing key, which vouches for its
+    /// rotating epoch keys. Empty for a client that predates forward secrecy.
+    /// </summary>
+    public string SigningPublicKey { get; init; } = string.Empty;
+
     /// <summary>Plugin version, for diagnostics.</summary>
     public string? ClientVersion { get; init; }
 
@@ -46,6 +52,7 @@ public sealed record AccountInfo
     public string DisplayName { get; init; } = string.Empty;
     public string ShareCode { get; init; } = string.Empty;
     public string PublicKey { get; init; } = string.Empty;
+    public string SigningPublicKey { get; init; } = string.Empty;
     public long CreatedAtUnixMs { get; init; }
     public int ContactCount { get; init; }
     public int PendingRequestCount { get; init; }
@@ -58,6 +65,18 @@ public sealed record UpdateAccountRequest
     public bool RotateShareCode { get; init; }
     /// <summary>New public key, when the client rotated its keypair.</summary>
     public string? PublicKey { get; init; }
+
+    /// <summary>
+    /// Signing key for an account created before forward secrecy existed, so it can be upgraded in place
+    /// rather than having to be abandoned and re-created.
+    /// </summary>
+    public string? SigningPublicKey { get; init; }
+}
+
+/// <summary>Publishes the current epoch key so contacts can encrypt to it.</summary>
+public sealed record PublishPrekeyRequest
+{
+    public PrekeyBundle Bundle { get; init; } = new();
 }
 
 /// <summary>A mutually accepted contact.</summary>
@@ -66,6 +85,16 @@ public sealed record ContactDto
     public string AccountId { get; init; } = string.Empty;
     public string DisplayName { get; init; } = string.Empty;
     public string PublicKey { get; init; } = string.Empty;
+
+    /// <summary>Their signing key, used to check that a prekey bundle really came from them.</summary>
+    public string SigningPublicKey { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Their current epoch key. Null when they have not published one, which means they are still on a
+    /// client that predates forward secrecy.
+    /// </summary>
+    public PrekeyBundle? Prekey { get; init; }
+
     public long LinkedAtUnixMs { get; init; }
     /// <summary>When the relay last received a presence blob addressed to you from them.</summary>
     public long? LastPresenceAtUnixMs { get; init; }
@@ -101,10 +130,20 @@ public sealed record CreateContactRequest
 public sealed record PresenceEnvelope
 {
     public string RecipientAccountId { get; init; } = string.Empty;
+
     /// <summary>Base64 AES-GCM nonce (12 bytes).</summary>
     public string Nonce { get; init; } = string.Empty;
+
     /// <summary>Base64 ciphertext with the 16 byte GCM tag appended.</summary>
     public string Ciphertext { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Which epoch keys sealed this, so the recipient knows which of the private keys it still holds to
+    /// try. Zero on both means the legacy long-term keys were used.
+    /// </summary>
+    public int SenderEpoch { get; init; }
+
+    public int RecipientEpoch { get; init; }
 }
 
 public sealed record PublishPresenceRequest
@@ -128,6 +167,11 @@ public sealed record ReceivedPresence
     public string SenderDisplayName { get; init; } = string.Empty;
     public string Nonce { get; init; } = string.Empty;
     public string Ciphertext { get; init; } = string.Empty;
+    /// <summary>Which epoch keys sealed this, copied back untouched from the publish.</summary>
+    public int SenderEpoch { get; init; }
+
+    public int RecipientEpoch { get; init; }
+
     public long ReceivedAtUnixMs { get; init; }
     public long ExpiresAtUnixMs { get; init; }
 }
@@ -171,6 +215,8 @@ public sealed record GroupMemberDto
     public string AccountId { get; init; } = string.Empty;
     public string DisplayName { get; init; } = string.Empty;
     public string PublicKey { get; init; } = string.Empty;
+    public string SigningPublicKey { get; init; } = string.Empty;
+    public PrekeyBundle? Prekey { get; init; }
     public long JoinedAtUnixMs { get; init; }
 }
 
@@ -200,6 +246,11 @@ public sealed record BeaconEnvelope
     public string RecipientAccountId { get; init; } = string.Empty;
     public string Nonce { get; init; } = string.Empty;
     public string Ciphertext { get; init; } = string.Empty;
+
+    /// <summary>Which epoch keys sealed this. Zero on both means the legacy long-term keys.</summary>
+    public int SenderEpoch { get; init; }
+
+    public int RecipientEpoch { get; init; }
 }
 
 public sealed record PublishBeaconRequest
@@ -226,6 +277,11 @@ public sealed record ReceivedBeacon
     public string SenderDisplayName { get; init; } = string.Empty;
     public string Nonce { get; init; } = string.Empty;
     public string Ciphertext { get; init; } = string.Empty;
+    /// <summary>Which epoch keys sealed this, copied back untouched from the publish.</summary>
+    public int SenderEpoch { get; init; }
+
+    public int RecipientEpoch { get; init; }
+
     public long ReceivedAtUnixMs { get; init; }
     public long ExpiresAtUnixMs { get; init; }
 }

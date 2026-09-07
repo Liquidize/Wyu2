@@ -61,6 +61,13 @@ public sealed record PresencePayload
     [JsonPropertyName("t")]
     public long SentAtUnixMs { get; init; }
 
+    /// <summary>
+    /// Rises by one on every publish. Inside the sealed envelope, so it cannot be edited in transit;
+    /// that is what lets a recipient tell a fresh update from a relay re-serving an old one.
+    /// </summary>
+    [JsonPropertyName("seq")]
+    public long Sequence { get; init; }
+
     /// <summary>Character name of the sender, as they chose to present it.</summary>
     [JsonPropertyName("name")]
     public string CharacterName { get; init; } = string.Empty;

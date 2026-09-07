@@ -5,8 +5,11 @@ namespace Wyu2.Protocol;
 /// </summary>
 public static class ProtocolConstants
 {
-    /// <summary>Wire protocol version. Bumped whenever a breaking change lands.</summary>
-    public const int Version = 1;
+    /// <summary>
+    /// Wire protocol version. Version 2 added the rotating epoch keys that give presence forward
+    /// secrecy, and the counter that makes a replayed update detectable.
+    /// </summary>
+    public const int Version = 2;
 
     /// <summary>Header carrying the account access token.</summary>
     public const string AuthorizationScheme = "Bearer";

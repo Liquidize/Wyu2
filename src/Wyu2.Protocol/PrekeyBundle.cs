@@ -15,6 +15,9 @@ namespace Wyu2.Protocol;
 /// </summary>
 public sealed record PrekeyBundle
 {
+    /// <summary>True when this looks like a bundle at all, as opposed to an unset placeholder.</summary>
+    public bool IsPresent => Epoch > 0 && EpochPublicKey.Length > 0 && Signature.Length > 0;
+
     /// <summary>Rises by one on each rotation. Identifies which private key opens a payload.</summary>
     public int Epoch { get; init; }
 
