@@ -33,6 +33,10 @@ public sealed class RadarWindow : Window
             MinimumSize = new Vector2(220f, 240f),
             MaximumSize = new Vector2(1400f, 1400f),
         };
+
+        // Same reasoning as the map window: the radar sizes itself to the space it is given, so a
+        // scrollbar appearing would change that space and feed straight back into the size.
+        Flags = ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse;
     }
 
     /// <summary>Set when the user clicks a blip, so the map window can follow along.</summary>
@@ -57,8 +61,15 @@ public sealed class RadarWindow : Window
         DrawToolbar();
 
         var available = ImGui.GetContentRegionAvail();
-        var footer = ImGui.GetTextLineHeightWithSpacing() * 2f;
-        var side = MathF.Max(120f, MathF.Min(available.X, available.Y - footer));
+        // Reserve the footer line, and let the radar shrink rather than overflow: a minimum size that
+        // exceeds the content region is what makes a scrollbar appear and the layout oscillate.
+        var side = MathF.Min(available.X, available.Y - ImGui.GetTextLineHeightWithSpacing());
+        if (side < 32f)
+        {
+            UiHelpers.TextMuted("Not enough room to draw the radar.");
+            return;
+        }
+
         var origin = ImGui.GetCursorScreenPos();
         var centre = origin + new Vector2(side / 2f, side / 2f);
         var radius = (side / 2f) - 4f;

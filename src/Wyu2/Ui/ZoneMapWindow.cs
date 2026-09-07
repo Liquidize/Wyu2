@@ -39,6 +39,11 @@ public sealed class ZoneMapWindow : Window
             MinimumSize = new Vector2(320f, 320f),
             MaximumSize = new Vector2(2000f, 2000f),
         };
+
+        // The map sizes itself to the space it is given, so a scrollbar appearing would change that
+        // space and feed back into the size. Forbidding scrollbars makes that loop impossible.
+        // NoScrollWithMouse also keeps the wheel for zooming instead of scrolling the window.
+        Flags = ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse;
     }
 
     /// <summary>Points the map at whichever zone a friend is in.</summary>
@@ -85,8 +90,17 @@ public sealed class ZoneMapWindow : Window
             return;
         }
 
+        // Reserve the legend line before sizing the square, and never round the size up past what is
+        // actually left: a square that overflows the content region is what starts the scrollbar
+        // feedback loop this window used to flicker with.
         var available = ImGui.GetContentRegionAvail();
-        var side = MathF.Max(160f, MathF.Min(available.X, available.Y));
+        var side = MathF.Min(available.X, available.Y - ImGui.GetTextLineHeightWithSpacing());
+        if (side < 32f)
+        {
+            UiHelpers.TextMuted("Not enough room to draw the map.");
+            return;
+        }
+
         var origin = ImGui.GetCursorScreenPos();
         var drawList = ImGui.GetWindowDrawList();
 
