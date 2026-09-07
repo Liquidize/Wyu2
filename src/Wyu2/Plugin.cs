@@ -29,6 +29,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly ZoneMapWindow mapWindow;
     private readonly ConfigWindow configWindow;
     private readonly WorldOverlay overlay;
+    private readonly AlertService alerts;
     private readonly IDtrBarEntry dtrEntry;
 
     public Plugin(IDalamudPluginInterface pluginInterface)
@@ -36,12 +37,15 @@ public sealed class Plugin : IDalamudPlugin
         pluginInterface.Create<Service>();
 
         config = pluginInterface.GetPluginConfig() as Configuration.Configuration ?? new Configuration.Configuration();
+        if (config.Migrate())
+            config.Save();
 
         data = new GameDataCache();
         client = new RelayClient(config, Version);
         session = new RelaySession(config, client);
         scanner = new NearbyScanner(config);
 
+        alerts = new AlertService(config, data);
         var activity = new ActivityResolver(data);
         var snapshots = new SelfSnapshotBuilder(config, data, activity);
         hub = new PresenceHub(config, client, session, snapshots, scanner, data);
@@ -81,7 +85,6 @@ public sealed class Plugin : IDalamudPlugin
         Service.PluginInterface.UiBuilder.OpenConfigUi += OpenConfigUi;
         Service.Framework.Update += OnFrameworkUpdate;
         Service.ClientState.Login += OnLogin;
-        hub.FriendChangedZone += OnFriendChangedZone;
 
         if (session.HasAccount)
             hub.SyncContactsNow();
@@ -98,7 +101,6 @@ public sealed class Plugin : IDalamudPlugin
         Service.PluginInterface.UiBuilder.Draw -= DrawUi;
         Service.PluginInterface.UiBuilder.OpenMainUi -= OpenMainUi;
         Service.PluginInterface.UiBuilder.OpenConfigUi -= OpenConfigUi;
-        hub.FriendChangedZone -= OnFriendChangedZone;
 
         Service.Commands.RemoveHandler(MainCommand);
         Service.Commands.RemoveHandler(ShortCommand);
@@ -116,6 +118,7 @@ public sealed class Plugin : IDalamudPlugin
         try
         {
             hub.Update();
+            alerts.Evaluate(hub.Friends);
             UpdateDtr();
             HandleRadarFocus();
         }
@@ -166,14 +169,6 @@ public sealed class Plugin : IDalamudPlugin
 
         if (session.HasAccount)
             hub.SyncContactsNow();
-    }
-
-    private void OnFriendChangedZone(TrackedFriend friend, string zoneName)
-    {
-        if (!config.AnnounceZoneChangesInChat || !friend.Settings.NotifyOnZoneChange)
-            return;
-
-        Service.Chat.Print($"{friend.Name} is now in {(string.IsNullOrWhiteSpace(zoneName) ? "another zone" : zoneName)}.", "Wyu2");
     }
 
     private void OnCommand(string command, string arguments)

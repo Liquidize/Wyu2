@@ -328,11 +328,37 @@ public sealed class ConfigWindow : Window
             config.Save();
         }
 
-        if (UiHelpers.Checkbox("Announce zone changes in chat", () => config.AnnounceZoneChangesInChat,
-                v => config.AnnounceZoneChangesInChat = v,
-                "Only for contacts with the per-contact announcement toggle switched on."))
-        {
+        ImGui.Separator();
+        ImGui.TextUnformatted("Alerts");
+        UiHelpers.HelpMarker(
+            "Which contacts you hear about is set per contact: right click somebody in the friend list. " +
+            "These control how the alert reaches you.");
+
+        if (UiHelpers.Checkbox("Enable alerts", () => config.AlertsEnabled, v => config.AlertsEnabled = v))
             config.Save();
+
+        using (ImRaii.Disabled(!config.AlertsEnabled))
+        {
+            if (UiHelpers.Checkbox("In the chat log", () => config.AlertInChat, v => config.AlertInChat = v))
+                config.Save();
+
+            if (UiHelpers.Checkbox("As a notification", () => config.AlertAsNotification,
+                    v => config.AlertAsNotification = v))
+            {
+                config.Save();
+            }
+
+            if (UiHelpers.Checkbox("Play a sound", () => config.AlertSound, v => config.AlertSound = v))
+                config.Save();
+
+            using (ImRaii.Disabled(!config.AlertSound))
+            {
+                if (UiHelpers.SliderInt("Sound", () => config.AlertSoundId, v => config.AlertSoundId = v,
+                        1, 16, "effect %d"))
+                {
+                    config.Save();
+                }
+            }
         }
 
         ImGui.Separator();

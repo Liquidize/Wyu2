@@ -32,8 +32,14 @@ public sealed class ContactSettings
     /// <summary>Colour used for their radar blip.</summary>
     public Vector4 Color { get; set; } = new(0.35f, 0.78f, 1.00f, 1f);
 
-    /// <summary>Announce in chat when they come online or change zone.</summary>
+    /// <summary>
+    /// Superseded by <see cref="Alerts"/> in configuration version 2. Kept so an existing setting can be
+    /// migrated rather than silently lost.
+    /// </summary>
     public bool NotifyOnZoneChange { get; set; }
+
+    /// <summary>Which of this contact's transitions are worth telling you about.</summary>
+    public AlertTriggers Alerts { get; set; } = AlertTriggers.None;
 
     /// <summary>
     /// Where this contact was the last time they published anything, kept so a friend who logs out
@@ -82,7 +88,7 @@ public sealed class RadarSettings
 /// <summary>Everything the plugin remembers between sessions.</summary>
 public sealed class Configuration : IPluginConfiguration
 {
-    public const int CurrentVersion = 1;
+    public const int CurrentVersion = 2;
 
     public int Version { get; set; } = CurrentVersion;
 
@@ -165,7 +171,22 @@ public sealed class Configuration : IPluginConfiguration
     public bool AnimateMapMarkers { get; set; } = true;
     public bool OverlayShowActivity { get; set; } = true;
     public float OverlayMaxDistance { get; set; } = 200f;
-    public bool AnnounceZoneChangesInChat { get; set; }
+    // ------------------------------------------------------------------ alerts
+
+    /// <summary>Master switch for contact alerts. Individual triggers are per contact.</summary>
+    public bool AlertsEnabled { get; set; } = true;
+
+    /// <summary>Print alerts to the chat log.</summary>
+    public bool AlertInChat { get; set; } = true;
+
+    /// <summary>Show alerts as Dalamud notifications.</summary>
+    public bool AlertAsNotification { get; set; } = true;
+
+    /// <summary>Play a sound with each alert.</summary>
+    public bool AlertSound { get; set; }
+
+    /// <summary>Which of the game's sixteen chat sound effects to play.</summary>
+    public int AlertSoundId { get; set; } = 1;
 
     /// <summary>Seconds after which an entry is drawn as stale.</summary>
     public int StaleAfterSeconds { get; set; } = 60;
@@ -215,6 +236,26 @@ public sealed class Configuration : IPluginConfiguration
         !string.IsNullOrEmpty(AccountId) &&
         !string.IsNullOrEmpty(AccessToken) &&
         !string.IsNullOrEmpty(PrivateKey);
+
+    /// <summary>
+    /// Brings an older configuration up to date. Returns true when something changed and the file should
+    /// be written back.
+    /// </summary>
+    public bool Migrate()
+    {
+        if (Version >= CurrentVersion)
+            return false;
+
+        if (Version < 2)
+        {
+            // The single "announce zone changes" flag became a set of per-contact triggers.
+            foreach (var contact in Contacts.Where(c => c.NotifyOnZoneChange))
+                contact.Alerts |= AlertTriggers.ChangedZone;
+        }
+
+        Version = CurrentVersion;
+        return true;
+    }
 
     public void Save() => Service.PluginInterface.SavePluginConfig(this);
 }

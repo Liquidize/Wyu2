@@ -2,6 +2,7 @@ using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
+using Wyu2.Configuration;
 using Wyu2.Model;
 using Wyu2.Net;
 using Wyu2.Protocol;
@@ -348,14 +349,31 @@ public sealed class MainWindow : Window
             hub.PublishNow();
         }
 
-        if (UiHelpers.Checkbox("Announce their zone changes", () => settings.NotifyOnZoneChange, v => settings.NotifyOnZoneChange = v))
-            config.Save();
+        ImGui.Separator();
+        ImGui.TextUnformatted("Tell me when they...");
+        AlertToggle(settings, AlertTriggers.CameOnline, "come online");
+        AlertToggle(settings, AlertTriggers.WentOffline, "go offline");
+        AlertToggle(settings, AlertTriggers.EnteredMyZone, "arrive in my zone");
+        AlertToggle(settings, AlertTriggers.ChangedZone, "change zone");
+        AlertToggle(settings, AlertTriggers.EnteredDuty, "start a duty");
+        AlertToggle(settings, AlertTriggers.LeftDuty, "finish a duty");
 
         if (ImGui.MenuItem("Hide from radar and list"))
         {
             settings.ShowThem = false;
             config.Save();
         }
+    }
+
+    /// <summary>One bit of a contact's alert mask.</summary>
+    private void AlertToggle(Configuration.ContactSettings settings, AlertTriggers trigger, string label)
+    {
+        var enabled = settings.Alerts.HasFlag(trigger);
+        if (!ImGui.Checkbox(label, ref enabled))
+            return;
+
+        settings.Alerts = enabled ? settings.Alerts | trigger : settings.Alerts & ~trigger;
+        config.Save();
     }
 
     // ---------------------------------------------------------------- contacts

@@ -51,9 +51,6 @@ public sealed class PresenceHub : IDisposable
     /// <summary>Friends with any data at all, ordered for display.</summary>
     public IReadOnlyList<TrackedFriend> Friends { get; private set; } = [];
 
-    /// <summary>Raised when a friend moves to a different zone, so the plugin can shout about it.</summary>
-    public event Action<TrackedFriend, string>? FriendChangedZone;
-
     public PublishBlockReason BlockReason => snapshots.LastBlockReason;
 
     public DateTime? LastPublishAt { get; private set; }
@@ -226,21 +223,11 @@ public sealed class PresenceHub : IDisposable
                 friends[accountId] = friend;
             }
 
-            var previousZone = friend.Payload?.TerritoryTypeId;
-            var previousInstance = friend.Payload?.InstanceId;
-
             friend.Settings = settings;
             friend.RelayDisplayName = displayName;
             friend.Payload = payload;
             friend.RelayUpdatedAt = DateTime.UtcNow;
             friend.Sources |= PresenceSource.Relay;
-
-            if (payload.TerritoryTypeId is { } zone &&
-                (previousZone != zone || previousInstance != payload.InstanceId) &&
-                previousZone is not null)
-            {
-                FriendChangedZone?.Invoke(friend, data.GetZoneName(zone));
-            }
         }
     }
 
