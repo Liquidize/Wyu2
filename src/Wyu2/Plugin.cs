@@ -30,6 +30,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly ZoneMapWindow mapWindow;
     private readonly ConfigWindow configWindow;
     private readonly WorldOverlay overlay;
+    private readonly NativeMapOverlay nativeMaps;
     private readonly AlertService alerts;
     private readonly AetheryteFinder aetherytes;
     private readonly TeleporterIpc teleporter;
@@ -63,6 +64,7 @@ public sealed class Plugin : IDalamudPlugin
             config, hub, beacons, session, client, mapWindow, aetherytes, teleporter,
             () => configWindow.IsOpen = true);
         overlay = new WorldOverlay(config, hub);
+        nativeMaps = new NativeMapOverlay(config, hub, beacons);
 
         windows.AddWindow(mainWindow);
         windows.AddWindow(radarWindow);
@@ -167,6 +169,7 @@ public sealed class Plugin : IDalamudPlugin
     {
         windows.Draw();
         overlay.Draw();
+        nativeMaps.Draw();
     }
 
     private void OpenMainUi() => mainWindow.Toggle();

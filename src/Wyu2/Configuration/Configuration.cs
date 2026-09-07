@@ -119,6 +119,33 @@ public sealed class RadarSettings
     public Vector4 StaleColor { get; set; } = new(0.55f, 0.55f, 0.55f, 1f);
 }
 
+/// <summary>
+/// Drawing contacts over the game's own map and minimap, rather than only in the plugin's window.
+/// </summary>
+public sealed class NativeMapSettings
+{
+    /// <summary>Draw over the full zone map the map key opens.</summary>
+    public bool OnAreaMap { get; set; } = true;
+
+    /// <summary>Draw over the minimap in the corner of the screen.</summary>
+    public bool OnMiniMap { get; set; } = true;
+
+    /// <summary>Write each contact's name beside their marker.</summary>
+    public bool ShowNames { get; set; } = true;
+
+    /// <summary>Draw beacons there too, subject to the master beacon switch.</summary>
+    public bool ShowBeacons { get; set; } = true;
+
+    /// <summary>
+    /// Pin contacts who are past the edge of the minimap to its rim instead of dropping them. The
+    /// minimap covers so little ground that most contacts are outside it most of the time.
+    /// </summary>
+    public bool ClampToMiniMapEdge { get; set; } = true;
+
+    /// <summary>Marker radius in pixels at an interface scale of one.</summary>
+    public float MarkerSize { get; set; } = 5f;
+}
+
 /// <summary>Everything the plugin remembers between sessions.</summary>
 public sealed class Configuration : IPluginConfiguration
 {
@@ -200,6 +227,10 @@ public sealed class Configuration : IPluginConfiguration
     // ------------------------------------------------------------------ ui
 
     public RadarSettings Radar { get; set; } = new();
+
+    /// <summary>Contacts drawn over the game's own map and minimap.</summary>
+    public NativeMapSettings NativeMap { get; set; } = new();
+
     public bool ShowMainWindowOnStart { get; set; }
     public bool ShowDtrEntry { get; set; } = true;
     public bool ShowWorldOverlay { get; set; }

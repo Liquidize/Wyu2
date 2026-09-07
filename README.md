@@ -20,6 +20,11 @@ pointing at them.
 **A map.** The real zone map sheet from the game files, pannable and zoomable, with a marker for each
 friend in that zone. Click a marker to open the in-game map at their coordinates.
 
+**On the game's own map.** Contacts and beacons are also drawn onto the map the map key opens and onto
+the minimap, so there is no second window to keep open. Only people in your zone, your public instance
+and on your world appear there. Nothing is added to the game's interface: the markers are painted over
+the top of it, and both maps can be switched off separately in the settings.
+
 **A list.** Who is online, which job and level they are playing, which zone and public instance they are
 in, and one line describing what they are actually doing:
 

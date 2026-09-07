@@ -324,6 +324,61 @@ public sealed class ConfigWindow : Window
                 config.Save();
             }
         }
+
+        ImGui.Separator();
+        DrawNativeMap();
+    }
+
+    // ------------------------------------------------------- the game's own map
+
+    private void DrawNativeMap()
+    {
+        var native = config.NativeMap;
+
+        ImGui.TextUnformatted("The game's own map");
+        UiHelpers.HelpMarker(
+            "Contacts are drawn straight onto the map and the minimap the game already gives you. " +
+            "Only people in your zone, your public instance and on your world appear, since anybody " +
+            "else's coordinates would point at somewhere you cannot walk to. Nothing is added to the " +
+            "game's interface: the markers are painted over the top of it.");
+
+        if (UiHelpers.Checkbox("Draw on the full map", () => native.OnAreaMap, v => native.OnAreaMap = v,
+                "Only while the map is showing the zone you are standing in."))
+        {
+            config.Save();
+        }
+
+        if (UiHelpers.Checkbox("Draw on the minimap", () => native.OnMiniMap, v => native.OnMiniMap = v))
+            config.Save();
+
+        using (ImRaii.Disabled(!native.OnAreaMap && !native.OnMiniMap))
+        {
+            if (UiHelpers.Checkbox("Names on the full map", () => native.ShowNames, v => native.ShowNames = v,
+                    "The minimap is left unlabelled either way; there is no room for it."))
+            {
+                config.Save();
+            }
+
+            if (UiHelpers.Checkbox("Beacons too", () => native.ShowBeacons, v => native.ShowBeacons = v))
+                config.Save();
+
+            using (ImRaii.Disabled(!native.OnMiniMap))
+            {
+                if (UiHelpers.Checkbox("Pin contacts to the minimap edge", () => native.ClampToMiniMapEdge,
+                        v => native.ClampToMiniMapEdge = v,
+                        "Somebody past the edge of the minimap is drawn on its rim, pointing the way, " +
+                        "instead of vanishing."))
+                {
+                    config.Save();
+                }
+            }
+
+            if (UiHelpers.SliderFloat("Marker size", () => native.MarkerSize, v => native.MarkerSize = v,
+                    2f, 12f, "%.0f pixels"))
+            {
+                config.Save();
+            }
+        }
     }
 
     // ---------------------------------------------------------------- other
