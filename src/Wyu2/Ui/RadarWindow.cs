@@ -81,7 +81,8 @@ public sealed class RadarWindow : Window
         var drawList = ImGui.GetWindowDrawList();
         DrawBackground(drawList, centre, radius);
 
-        var yaw = 0f;
+        // Yaw is measured from south, so the fixed orientation is half a turn round, not zero.
+        var yaw = RadarProjection.NorthUpYaw;
         if (config.Radar.RotateWithCamera)
             CameraUtil.TryGetYaw(out yaw);
 

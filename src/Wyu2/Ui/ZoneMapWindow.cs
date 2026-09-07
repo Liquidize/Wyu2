@@ -220,7 +220,7 @@ public sealed class ZoneMapWindow : Window
 
         foreach (var friend in hub.Friends)
         {
-            if (!config.CanSee(friend.Settings) || friend.TerritoryTypeId != selectedTerritory)
+            if (!config.CanSee(friend.Settings) || !IsOnThisMap(friend))
                 continue;
 
             if (friend.Position is not { } position)
@@ -395,6 +395,32 @@ public sealed class ZoneMapWindow : Window
 
             previous = point;
         }
+    }
+
+    /// <summary>
+    /// Whether a contact's coordinates describe the zone being shown. The map can be pointed at somewhere
+    /// you are not standing, so there is no instance of your own to compare against - but the world can
+    /// always be checked, and somebody on another world is in a different copy of the zone whatever their
+    /// coordinates say.
+    /// </summary>
+    private bool IsOnThisMap(TrackedFriend friend)
+    {
+        if (friend.TerritoryTypeId != selectedTerritory)
+            return false;
+
+        var theirWorld = friend.Payload?.CurrentWorldId ?? 0;
+        var myWorld = Service.Objects.LocalPlayer?.CurrentWorld.RowId ?? 0;
+        if (theirWorld != 0 && myWorld != 0 && theirWorld != myWorld)
+            return false;
+
+        // Standing in the zone being shown means the instance is comparable, so use it.
+        if (Service.ClientState.TerritoryType == selectedTerritory &&
+            friend.InstanceId != Service.ClientState.Instance)
+        {
+            return false;
+        }
+
+        return true;
     }
 
     private void DrawSelfMarker(ImDrawListPtr drawList, Map map, Vector2 origin, float side, Vector2 uvMin, Vector2 span)

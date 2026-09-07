@@ -31,15 +31,9 @@ public static unsafe class CameraUtil
     }
 
     /// <summary>
-    /// Turns a world space offset into radar space: +X right, +Y down, with "up" being either north or
-    /// the direction the camera faces.
+    /// Turns a world space offset into radar space. The arithmetic lives in
+    /// <see cref="RadarProjection"/> so it can be tested without the game.
     /// </summary>
     public static Vector2 WorldOffsetToRadar(Vector3 offset, float yaw)
-    {
-        var sin = MathF.Sin(yaw);
-        var cos = MathF.Cos(yaw);
-        return new Vector2(
-            (offset.X * cos) - (offset.Z * sin),
-            -((offset.X * sin) + (offset.Z * cos)));
-    }
+        => RadarProjection.WorldOffsetToRadar(offset, yaw);
 }
