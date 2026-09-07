@@ -102,5 +102,10 @@ jobs:
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" Wyu2.zip repo.json --clobber
           else
-            gh release create "$TAG" Wyu2.zip repo.json --title "Wyu2 $TAG" --notes "$NOTES"
+            # --target pins the tag to the commit this run built, and creates it if a tag push
+            # was not what started the run.
+            gh release create "$TAG" Wyu2.zip repo.json \
+              --target "$GITHUB_SHA" \
+              --title "Wyu2 $TAG" \
+              --notes "$NOTES"
           fi
