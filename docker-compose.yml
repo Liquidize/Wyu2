@@ -1,0 +1,23 @@
+services:
+  relay:
+    build:
+      context: .
+      dockerfile: src/FriendRadar.Relay/Dockerfile
+    restart: unless-stopped
+    ports:
+      # Bind to localhost and put a TLS terminating reverse proxy in front of it.
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - relay-data:/data
+    environment:
+      Relay__Name: "My FriendRadar relay"
+      Relay__Operator: "someone@example.com"
+      Relay__RegistrationOpen: "true"
+      # Close registration and hand out codes instead:
+      # Relay__RegistrationOpen: "false"
+      # Relay__InviteCodes__0: "my-static-invite-code"
+      Relay__MaxAccounts: "0"
+      Relay__RequestsPerMinute: "240"
+
+volumes:
+  relay-data:
